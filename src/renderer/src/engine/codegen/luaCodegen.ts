@@ -2,6 +2,7 @@ import { WorkflowStep } from '../../types/robot.types'
 
 /**
  * Generates Fairino robot LUA script from Workflow steps.
+ * Uses official Fairino LUA SDK syntax (global functions, standard parameters).
  */
 export function generateLua(steps: WorkflowStep[], projectName: string = 'Unnamed Project'): string {
   const dateStr = new Date().toISOString().split('T')[0]
@@ -11,13 +12,8 @@ export function generateLua(steps: WorkflowStep[], projectName: string = 'Unname
 -- Project Name : ${projectName}
 -- Robot Model  : Fairino FR5 (6-DOF)
 -- Date         : ${dateStr}
+-- Note         : Compatible with Fairino Controller LUA SDK
 -- ============================================
-
-local robot = require("robot")
-local sys = require("sys")
-
--- Reset / Home robot mode to Auto
--- Make sure the robot is enabled before running
 
 `
 
@@ -37,8 +33,8 @@ local sys = require("sys")
       case 'MoveJ':
         if (step.jointAngles) {
           const [j1, j2, j3, j4, j5, j6] = step.jointAngles
-          // Format: robot.MoveJ(joint_pos, speed, acc, tool_num, user_num)
-          lua += `robot.MoveJ({j1=${j1.toFixed(2)}, j2=${j2.toFixed(2)}, j3=${j3.toFixed(2)}, j4=${j4.toFixed(2)}, j5=${j5.toFixed(2)}, j6=${j6.toFixed(2)}}, ${step.speed}, ${step.acc}, 0, 0)\n`
+          // Format: MoveJ({j1, j2, j3, j4, j5, j6}, tool, user, vel, acc, blendT, blendR)
+          lua += `MoveJ({${j1.toFixed(2)}, ${j2.toFixed(2)}, ${j3.toFixed(2)}, ${j4.toFixed(2)}, ${j5.toFixed(2)}, ${j6.toFixed(2)}}, 0, 0, ${step.speed.toFixed(1)}, ${step.acc.toFixed(1)}, -1.0, -1.0)\n`
         } else {
           lua += `-- Lỗi: Thiếu thông số góc khớp cho MoveJ\n`
         }
@@ -47,8 +43,8 @@ local sys = require("sys")
       case 'MoveL':
         if (step.tcpPose) {
           const { x, y, z, rx, ry, rz } = step.tcpPose
-          // Format: robot.MoveL(cartesian_pos, speed, acc, tool_num, user_num)
-          lua += `robot.MoveL({x=${x.toFixed(2)}, y=${y.toFixed(2)}, z=${z.toFixed(2)}, rx=${rx.toFixed(2)}, ry=${ry.toFixed(2)}, rz=${rz.toFixed(2)}}, ${step.speed}, ${step.acc}, 0, 0)\n`
+          // Format: MoveL({x, y, z, rx, ry, rz}, tool, user, vel, acc, blendT, blendR)
+          lua += `MoveL({${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}, ${rx.toFixed(2)}, ${ry.toFixed(2)}, ${rz.toFixed(2)}}, 0, 0, ${step.speed.toFixed(1)}, ${step.acc.toFixed(1)}, -1.0, -1.0)\n`
         } else {
           lua += `-- Lỗi: Thiếu thông số TCP cho MoveL\n`
         }
@@ -57,28 +53,28 @@ local sys = require("sys")
       case 'SetDO':
         const doIdx = step.doIndex !== undefined ? step.doIndex : 1
         const doVal = step.doValue !== undefined ? step.doValue : 1
-        // Format: robot.SetDO(index, status)
-        lua += `robot.SetDO(${doIdx}, ${doVal})\n`
+        // Format: SetDO(index, status, block)
+        lua += `SetDO(${doIdx}, ${doVal}, 0)\n`
         break
 
       case 'WaitMs':
         const delay = step.delayMs !== undefined ? step.delayMs : 1000
-        // Format: sys.WaitMs(ms)
-        lua += `sys.WaitMs(${delay})\n`
+        // Format: WaitMs(ms)
+        lua += `WaitMs(${delay})\n`
         break
 
       case 'GripperOpen':
         // Map to setting DO1 to 0 (default gripper wiring setup)
         lua += `-- Điều khiển mở kẹp tay gắp\n`
-        lua += `robot.SetDO(1, 0)\n`
-        lua += `sys.WaitMs(500)\n`
+        lua += `SetDO(1, 0, 0)\n`
+        lua += `WaitMs(500)\n`
         break
 
       case 'GripperClose':
         // Map to setting DO1 to 1 (default gripper wiring setup)
         lua += `-- Điều khiển đóng kẹp tay gắp\n`
-        lua += `robot.SetDO(1, 1)\n`
-        lua += `sys.WaitMs(500)\n`
+        lua += `SetDO(1, 1, 0)\n`
+        lua += `WaitMs(500)\n`
         break
 
       case 'Comment':
