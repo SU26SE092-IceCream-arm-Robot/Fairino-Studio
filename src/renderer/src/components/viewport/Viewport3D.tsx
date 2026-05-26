@@ -11,6 +11,17 @@ import { solveIK } from '../../engine/robot/ikSolver'
 import { ShieldAlert, HelpCircle } from 'lucide-react'
 import { WorkflowStep } from '../../types/robot.types'
 
+const SELF_COLLISION_PAIRS = [
+  { a: 'shoulder_link', b: 'forearm_link' },
+  { a: 'shoulder_link', b: 'wrist1_link' },
+  { a: 'shoulder_link', b: 'wrist2_link' },
+  { a: 'shoulder_link', b: 'wrist3_link' },
+  { a: 'upperarm_link', b: 'wrist1_link' },
+  { a: 'upperarm_link', b: 'wrist2_link' },
+  { a: 'upperarm_link', b: 'wrist3_link' },
+  { a: 'forearm_link', b: 'wrist3_link' }
+]
+
 export default function Viewport3D() {
   const containerRef = useRef<HTMLDivElement>(null)
   const robotRef = useRef<any>(null)
@@ -20,6 +31,7 @@ export default function Viewport3D() {
   const dummyTargetRef = useRef<THREE.Object3D | null>(null)
   const boxHelperRef = useRef<THREE.BoxHelper | null>(null)
   const measureLineRef = useRef<THREE.Line | null>(null)
+  const selfMeasureLineRef = useRef<THREE.Line | null>(null)
   const hitboxHelpersRef = useRef<THREE.Box3Helper[]>([])
   const keysPressedRef = useRef<Set<string>>(new Set())
   const [isRobotLoaded, setIsRobotLoaded] = useState(false)
@@ -345,6 +357,21 @@ export default function Viewport3D() {
     scene.add(measureLine)
     measureLineRef.current = measureLine
 
+    // Self Measurement Line
+    const selfLineGeom = new THREE.BufferGeometry()
+    const selfLineMat = new THREE.LineDashedMaterial({
+      color: 0xf59e0b, // amber/orange for self collision
+      dashSize: 0.04,
+      gapSize: 0.02,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.8
+    })
+    const selfMeasureLine = new THREE.Line(selfLineGeom, selfLineMat)
+    selfMeasureLine.visible = false
+    scene.add(selfMeasureLine)
+    selfMeasureLineRef.current = selfMeasureLine
+
     // Transform Controls (IK, FK and Objects Gizmo)
     const transformControls = new TransformControls(camera, renderer.domElement)
     transformControls.size = 0.8
@@ -617,10 +644,13 @@ export default function Viewport3D() {
       const robot = robotRef.current
       const scene = sceneRef.current
       const measureLine = measureLineRef.current
-      if (!robot || !scene || !measureLine) return
+      const selfMeasureLine = selfMeasureLineRef.current
+      if (!robot || !scene || !measureLine || !selfMeasureLine) return
 
       const labelEl = document.getElementById('measure-label')
       const textEl = document.getElementById('measure-text')
+      const selfLabelEl = document.getElementById('self-measure-label')
+      const selfTextEl = document.getElementById('self-measure-text')
 
       // Get latest state directly from stores
       const unit = useRobotStore.getState().lengthUnit
@@ -679,7 +709,7 @@ export default function Viewport3D() {
       // 4. Render hitboxes if debug is active
       if (isDebug) {
         // Robot links
-        for (const box of linkBoxesMap.values()) {
+        for (const [linkName, box] of linkBoxesMap.entries()) {
           // Check if this link intersects any active object box
           let isColliding = false
           for (const obj of activeObjects) {
@@ -688,6 +718,28 @@ export default function Viewport3D() {
               break
             }
           }
+
+          // Check if this link intersects another link in self collision pairs
+          if (!isColliding) {
+            for (const pair of SELF_COLLISION_PAIRS) {
+              const nameLower = linkName.toLowerCase()
+              if (nameLower.includes(pair.a) || nameLower.includes(pair.b)) {
+                const otherKey = nameLower.includes(pair.a) ? pair.b : pair.a
+                let otherBox: THREE.Box3 | undefined
+                for (const [k, b] of linkBoxesMap.entries()) {
+                  if (k.toLowerCase().includes(otherKey)) {
+                    otherBox = b
+                    break
+                  }
+                }
+                if (otherBox && box.intersectsBox(otherBox)) {
+                  isColliding = true
+                  break
+                }
+              }
+            }
+          }
+
           const helperColor = isColliding ? 0xf43f5e : 0xeab308 // red vs yellow
           const helper = new THREE.Box3Helper(box, new THREE.Color(helperColor))
           scene.add(helper)
@@ -809,6 +861,95 @@ export default function Viewport3D() {
       } else {
         measureLine.visible = false
         if (labelEl) labelEl.style.display = 'none'
+      }
+
+      // 7. Compute self-collision distance measurement (Self-Distance)
+      if (linkBoxesMap.size > 0) {
+        let minSelfDistance = Infinity
+        let bestSelfPoints: { pointA: THREE.Vector3; pointB: THREE.Vector3 } | null = null
+        let selfLinkA = ''
+        let selfLinkB = ''
+
+        for (const pair of SELF_COLLISION_PAIRS) {
+          let boxA: THREE.Box3 | undefined
+          let boxB: THREE.Box3 | undefined
+          let keyA = ''
+          let keyB = ''
+
+          for (const [key, box] of linkBoxesMap.entries()) {
+            const keyLower = key.toLowerCase()
+            if (keyLower.includes(pair.a)) { boxA = box; keyA = key; }
+            if (keyLower.includes(pair.b)) { boxB = box; keyB = key; }
+          }
+
+          if (boxA && boxB) {
+            const res = getBoxDistance(boxA, boxB)
+            if (res.distance < minSelfDistance) {
+              minSelfDistance = res.distance
+              bestSelfPoints = res
+              selfLinkA = keyA
+              selfLinkB = keyB
+            }
+          }
+        }
+
+        if (bestSelfPoints && minSelfDistance < Infinity) {
+          const { pointA, pointB } = bestSelfPoints
+          
+          selfMeasureLine.geometry.setFromPoints([pointA, pointB])
+          selfMeasureLine.computeLineDistances()
+          selfMeasureLine.visible = true
+
+          const selfDistanceMm = Math.round(minSelfDistance * 1000)
+
+          if (selfLabelEl && selfTextEl && containerRef.current) {
+            const midPoint = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5)
+            midPoint.project(camera)
+
+            const w = containerRef.current.clientWidth
+            const h = containerRef.current.clientHeight
+            const x = (midPoint.x * 0.5 + 0.5) * w
+            const y = (-midPoint.y * 0.5 + 0.5) * h
+
+            const linkViNames: Record<string, string> = {
+              'shoulder_link': 'Khớp vai',
+              'upperarm_link': 'Bắp tay',
+              'forearm_link': 'Khuỷu tay',
+              'wrist1_link': 'Cổ tay 1',
+              'wrist2_link': 'Cổ tay 2',
+              'wrist3_link': 'Cổ tay 3'
+            }
+            const linkEnNames: Record<string, string> = {
+              'shoulder_link': 'Shoulder',
+              'upperarm_link': 'Upper Arm',
+              'forearm_link': 'Forearm',
+              'wrist1_link': 'Wrist 1',
+              'wrist2_link': 'Wrist 2',
+              'wrist3_link': 'Wrist 3'
+            }
+
+            const cleanLinkA = currentLanguage === 'vi'
+              ? (Object.keys(linkViNames).find(k => selfLinkA.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => selfLinkA.toLowerCase().includes(k))!] : selfLinkA)
+              : (Object.keys(linkEnNames).find(k => selfLinkA.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => selfLinkA.toLowerCase().includes(k))!] : selfLinkA)
+
+            const cleanLinkB = currentLanguage === 'vi'
+              ? (Object.keys(linkViNames).find(k => selfLinkB.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB)
+              : (Object.keys(linkEnNames).find(k => selfLinkB.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB)
+
+            selfLabelEl.style.left = `${x}px`
+            selfLabelEl.style.top = `${y}px`
+            selfLabelEl.style.display = 'flex'
+
+            const valStr = unit === 'm' ? `${(selfDistanceMm / 1000).toFixed(3)} m` : `${selfDistanceMm} mm`
+            selfTextEl.innerHTML = `${cleanLinkA} ↔ ${cleanLinkB}: ${valStr}`
+          }
+        } else {
+          selfMeasureLine.visible = false
+          if (selfLabelEl) selfLabelEl.style.display = 'none'
+        }
+      } else {
+        selfMeasureLine.visible = false
+        if (selfLabelEl) selfLabelEl.style.display = 'none'
       }
     }
 
@@ -943,21 +1084,8 @@ export default function Viewport3D() {
 
     // 2. Self Collision Detection (ignoring adjacent links and close wrist couples to avoid false positives)
     let selfCollide = false
-    const selfCollisionPairs = [
-      // shoulder_link (link1) vs others
-      { a: 'shoulder_link', b: 'forearm_link' },
-      { a: 'shoulder_link', b: 'wrist1_link' },
-      { a: 'shoulder_link', b: 'wrist2_link' },
-      { a: 'shoulder_link', b: 'wrist3_link' },
-      // upperarm_link (link2) vs others
-      { a: 'upperarm_link', b: 'wrist1_link' },
-      { a: 'upperarm_link', b: 'wrist2_link' },
-      { a: 'upperarm_link', b: 'wrist3_link' },
-      // forearm_link (link3) vs end-effector
-      { a: 'forearm_link', b: 'wrist3_link' }
-    ]
 
-    for (const pair of selfCollisionPairs) {
+    for (const pair of SELF_COLLISION_PAIRS) {
       let boxA: THREE.Box3 | undefined
       let boxB: THREE.Box3 | undefined
 
@@ -1327,6 +1455,16 @@ export default function Viewport3D() {
       >
         <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
         <span id="measure-text">0 mm</span>
+      </div>
+
+      {/* Dynamic self-measurement label */}
+      <div
+        id="self-measure-label"
+        className="absolute bg-[#1e1e24]/95 border border-amber-500/50 text-[10px] text-white px-2 py-1 rounded shadow-md pointer-events-none font-mono font-bold z-20 flex items-center gap-1.5"
+        style={{ display: 'none', transform: 'translate(-50%, -50%)' }}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+        <span id="self-measure-text">0 mm</span>
       </div>
 
       {/* Collision Warning Overlay */}

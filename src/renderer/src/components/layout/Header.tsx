@@ -2,7 +2,8 @@ import { useEffect } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { generateLua } from '../../engine/codegen/luaCodegen'
-import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe } from 'lucide-react'
+import { parseLua } from '../../engine/codegen/luaParser'
+import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload } from 'lucide-react'
 import { electronService } from '../../services/electronService'
 import { translations } from '../../i18n/translations'
 
@@ -173,6 +174,38 @@ export default function Header() {
     }
   }
 
+  const handleImportLua = async () => {
+    const result = await electronService.showOpenDialog({
+      title: t('importLua'),
+      filters: [{ name: 'Lua Script Files', extensions: ['lua'] }],
+      properties: ['openFile']
+    })
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      const filePath = result.filePaths[0]
+      const readRes = await electronService.readFile(filePath)
+      if (readRes.success && readRes.content) {
+        try {
+          const { steps: parsedSteps, projectName: parsedProjName } = parseLua(readRes.content)
+          if (parsedSteps.length === 0) {
+            alert(`${t('luaImportError')} ${language === 'vi' ? 'Không tìm thấy bước lệnh hợp lệ nào trong file LUA.' : 'No valid command steps found in the LUA file.'}`)
+            return
+          }
+          
+          reorderSteps(parsedSteps)
+          if (parsedProjName) {
+            setProjectName(parsedProjName)
+          }
+          alert(t('luaImportSuccess'))
+        } catch (e: any) {
+          alert(`${t('luaImportError')} ${e.message}`)
+        }
+      } else {
+        alert(`${t('luaImportError')} ${readRes.error}`)
+      }
+    }
+  }
+
   // Subscribe to native menu actions on mount
   useEffect(() => {
     if (typeof window !== 'undefined' && 'api' in window && window.api.onMenuAction) {
@@ -192,6 +225,9 @@ export default function Header() {
             break
           case 'export-lua':
             handleExportLua()
+            break
+          case 'import-lua':
+            handleImportLua()
             break
         }
       })
@@ -281,6 +317,15 @@ export default function Header() {
           </button>
           
           <div className="w-px h-5 bg-[#2d2d34] mx-1"></div>
+
+          <button
+            onClick={handleImportLua}
+            title={t('importLua')}
+            className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+          >
+            <Upload size={14} />
+            <span className="text-[11px] font-semibold hidden md:inline">{t('importLua')}</span>
+          </button>
           
           <button
             onClick={handleExportLua}
