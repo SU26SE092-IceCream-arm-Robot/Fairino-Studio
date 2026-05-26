@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { OBB } from 'three/examples/jsm/math/OBB.js'
 import URDFLoader from 'urdf-loader'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
@@ -32,7 +33,7 @@ export default function Viewport3D() {
   const boxHelperRef = useRef<THREE.BoxHelper | null>(null)
   const measureLineRef = useRef<THREE.Line | null>(null)
   const selfMeasureLineRef = useRef<THREE.Line | null>(null)
-  const hitboxHelpersRef = useRef<THREE.Box3Helper[]>([])
+  const hitboxHelpersRef = useRef<THREE.LineSegments[]>([])
   const keysPressedRef = useRef<Set<string>>(new Set())
   const [isRobotLoaded, setIsRobotLoaded] = useState(false)
   
@@ -105,22 +106,99 @@ export default function Viewport3D() {
     return solveIK(targetPos, targetQuat, currentAngles as any, robot)
   }
 
-  // Helper to calculate closest points and distance between two Box3 bounding boxes
-  const getBoxDistance = (boxA: THREE.Box3, boxB: THREE.Box3) => {
-    const centerA = new THREE.Vector3()
-    boxA.getCenter(centerA)
-    
-    const pointB = new THREE.Vector3()
-    boxB.clampPoint(centerA, pointB)
-    
-    const pointA = new THREE.Vector3()
-    boxA.clampPoint(pointB, pointA)
-    
-    return {
-      distance: pointA.distanceTo(pointB),
-      pointA,
-      pointB
+
+
+  // Compute a tight OBB for a single URDF link.
+  // IMPORTANT: In URDFLoader's scene graph, shoulder_link CONTAINS upperarm_link as a descendant.
+  // Using traverse() would collect ALL child arm meshes, making the OBB huge.
+  // This custom traversal stops at link boundaries (allLinkObjs set) so each OBB
+  // only covers the geometry that PHYSICALLY BELONGS to that specific link.
+  const computeLinkOBB = (linkObj: THREE.Object3D, allLinkObjs: Set<THREE.Object3D>): OBB | null => {
+    const invMatrix = new THREE.Matrix4().copy(linkObj.matrixWorld).invert()
+    const localBox = new THREE.Box3()
+    let hasMesh = false
+
+    // Custom DFS that stops when it enters a different link's subtree
+    const collectMeshes = (node: THREE.Object3D) => {
+      // Stop traversal if we've entered a child link (but allow the root linkObj itself)
+      if (node !== linkObj && allLinkObjs.has(node)) return
+
+      const mesh = node as any
+      if (mesh.isMesh && mesh.geometry) {
+        mesh.geometry.computeBoundingBox()
+        if (mesh.geometry.boundingBox) {
+          // Transform mesh-local bounds into the link's local coordinate frame
+          const childRelMat = new THREE.Matrix4().multiplyMatrices(invMatrix, mesh.matrixWorld)
+          const meshLocalBox = mesh.geometry.boundingBox.clone().applyMatrix4(childRelMat)
+          localBox.union(meshLocalBox)
+          hasMesh = true
+        }
+      }
+
+      for (const child of node.children) {
+        collectMeshes(child)
+      }
     }
+
+    collectMeshes(linkObj)
+
+    if (!hasMesh || localBox.isEmpty()) return null
+
+    // Center: local centroid projected into world space
+    const localCenter = new THREE.Vector3()
+    localBox.getCenter(localCenter)
+    const worldCenter = localCenter.clone().applyMatrix4(linkObj.matrixWorld)
+
+    // HalfSize from the link-local bounding box
+    const halfSize = new THREE.Vector3()
+    localBox.getSize(halfSize).multiplyScalar(0.5)
+
+    // Rotation: extract and normalize rotation columns from world matrix (strip scale)
+    const rotMat = new THREE.Matrix3().setFromMatrix4(linkObj.matrixWorld)
+    const el = rotMat.elements
+    const scaleX = new THREE.Vector3(el[0], el[1], el[2]).length()
+    const scaleY = new THREE.Vector3(el[3], el[4], el[5]).length()
+    const scaleZ = new THREE.Vector3(el[6], el[7], el[8]).length()
+    rotMat.elements[0] /= scaleX; rotMat.elements[1] /= scaleX; rotMat.elements[2] /= scaleX
+    rotMat.elements[3] /= scaleY; rotMat.elements[4] /= scaleY; rotMat.elements[5] /= scaleY
+    rotMat.elements[6] /= scaleZ; rotMat.elements[7] /= scaleZ; rotMat.elements[8] /= scaleZ
+
+    return new OBB(worldCenter, halfSize, rotMat)
+  }
+
+  // Calculate approximate closest points between two OBBs using iterative clamp
+  const getOBBDistance = (obbA: OBB, obbB: OBB) => {
+    const pointB = new THREE.Vector3()
+    obbB.clampPoint(obbA.center, pointB)
+    const pointA = new THREE.Vector3()
+    obbA.clampPoint(pointB, pointA)
+    return { distance: pointA.distanceTo(pointB), pointA, pointB }
+  }
+
+  // Draw 12 edges of an OBB as a LineSegments object (oriented wireframe)
+  const createOBBWireframe = (obb: OBB, color: number): THREE.LineSegments => {
+    const { center, halfSize, rotation } = obb
+    const corners: THREE.Vector3[] = []
+    // 8 corners: all sign combinations of halfSize, rotated and translated
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      const c = new THREE.Vector3(sx * halfSize.x, sy * halfSize.y, sz * halfSize.z)
+        .applyMatrix3(rotation).add(center)
+      corners.push(c)
+    }
+    // Canonical edge list for a box (12 edges)
+    const edgePairs = [
+      [0,1],[2,3],[4,5],[6,7],
+      [0,2],[1,3],[4,6],[5,7],
+      [0,4],[1,5],[2,6],[3,7]
+    ]
+    const positions: number[] = []
+    for (const [a, b] of edgePairs) {
+      positions.push(corners[a].x, corners[a].y, corners[a].z)
+      positions.push(corners[b].x, corners[b].y, corners[b].z)
+    }
+    const geom = new THREE.BufferGeometry()
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    return new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, depthTest: false }))
   }
 
   // Automatically calculate jointAngles and tcpPose for all steps in the store (State Accumulator)
@@ -652,12 +730,11 @@ export default function Viewport3D() {
       const selfLabelEl = document.getElementById('self-measure-label')
       const selfTextEl = document.getElementById('self-measure-text')
 
-      // Get latest state directly from stores
       const unit = useRobotStore.getState().lengthUnit
       const isDebug = useSceneStore.getState().isDebugHitbox
       const currentLanguage = useRobotStore.getState().language
 
-      // 1. Gather all active visible auxiliary objects
+      // 1. Gather active visible auxiliary objects (AABB is fine for non-articulated objects)
       const activeObjects: { id: string; name: string; box: THREE.Box3 }[] = []
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
@@ -667,195 +744,165 @@ export default function Viewport3D() {
         }
       }
 
-      // 2. Gather all link boxes of the robot arm
-      const getMeshLinkName = (mesh: THREE.Object3D): string | null => {
-        let obj: THREE.Object3D | null = mesh
-        while (obj) {
-          if (obj.name && (obj.name.toLowerCase().includes('link') || obj.name.toLowerCase().includes('base'))) {
-            return obj.name
-          }
-          obj = obj.parent
+      // 2. Compute OBB for each named URDF link, stopping traversal at link boundaries
+      const allLinkObjs = new Set<THREE.Object3D>(
+        Object.values(robot.links as Record<string, THREE.Object3D>)
+      )
+      const linkOBBMap = new Map<string, OBB>()
+      if (robot.links) {
+        for (const [name, linkObj] of Object.entries(robot.links as Record<string, THREE.Object3D>)) {
+          const obb = computeLinkOBB(linkObj, allLinkObjs)
+          if (obb) linkOBBMap.set(name, obb)
         }
-        return null
       }
 
-      const linkBoxesMap = new Map<string, THREE.Box3>()
-      robot.traverse((child: any) => {
-        if (child.isMesh) {
-          const linkName = getMeshLinkName(child)
-          if (linkName) {
-            child.geometry.computeBoundingBox()
-            if (child.geometry.boundingBox) {
-              const meshBox = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld)
-              if (linkBoxesMap.has(linkName)) {
-                linkBoxesMap.get(linkName)!.union(meshBox)
-              } else {
-                linkBoxesMap.set(linkName, meshBox)
-              }
-            }
-          }
-        }
-      })
-
-      // 3. Clear previous hitbox helpers
+      // 3. Clear previous OBB wireframe helpers
       hitboxHelpersRef.current.forEach(h => {
         scene.remove(h)
-        if (h.geometry) h.geometry.dispose()
-        if (Array.isArray(h.material)) h.material.forEach(m => m.dispose())
-        else if (h.material) h.material.dispose()
+        h.geometry.dispose()
+        ;(h.material as THREE.Material).dispose()
       })
       hitboxHelpersRef.current = []
 
-      // 4. Render hitboxes if debug is active
+      // 4. Render OBB wireframes if debug is active
       if (isDebug) {
-        // Robot links
-        for (const [linkName, box] of linkBoxesMap.entries()) {
-          // Check if this link intersects any active object box
-          let isColliding = false
-          for (const obj of activeObjects) {
-            if (box.intersectsBox(obj.box)) {
-              isColliding = true
-              break
+        // Links skipped for ground collision (they're always near the ground by design)
+        const SKIP_GROUND_HITBOX = ['base_link', 'shoulder_link']
+        const GROUND_Y = 0.005 // 5mm threshold
+
+        for (const [linkName, obb] of linkOBBMap.entries()) {
+          const nameLower = linkName.toLowerCase()
+
+          // Ground collision: check if any OBB corner dips below GROUND_Y
+          let isCollidingGround = false
+          if (!SKIP_GROUND_HITBOX.some(s => nameLower.includes(s))) {
+            const { center, halfSize, rotation } = obb
+            outerGround: for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+              const corner = new THREE.Vector3(sx * halfSize.x, sy * halfSize.y, sz * halfSize.z)
+                .applyMatrix3(rotation).add(center)
+              if (corner.y < GROUND_Y) { isCollidingGround = true; break outerGround }
             }
           }
 
-          // Check if this link intersects another link in self collision pairs
-          if (!isColliding) {
+          // Auxiliary object collision
+          let isCollidingObj = false
+          if (!isCollidingGround) {
+            for (const obj of activeObjects) {
+              if (obb.intersectsBox3(obj.box)) { isCollidingObj = true; break }
+            }
+          }
+
+          // Self-collision with paired links
+          let isCollidingSelf = false
+          if (!isCollidingGround && !isCollidingObj) {
             for (const pair of SELF_COLLISION_PAIRS) {
-              const nameLower = linkName.toLowerCase()
               if (nameLower.includes(pair.a) || nameLower.includes(pair.b)) {
                 const otherKey = nameLower.includes(pair.a) ? pair.b : pair.a
-                let otherBox: THREE.Box3 | undefined
-                for (const [k, b] of linkBoxesMap.entries()) {
-                  if (k.toLowerCase().includes(otherKey)) {
-                    otherBox = b
-                    break
-                  }
+                let otherOBB: OBB | undefined
+                for (const [k, o] of linkOBBMap.entries()) {
+                  if (k.toLowerCase().includes(otherKey)) { otherOBB = o; break }
                 }
-                if (otherBox && box.intersectsBox(otherBox)) {
-                  isColliding = true
-                  break
-                }
+                if (otherOBB && obb.intersectsOBB(otherOBB)) { isCollidingSelf = true; break }
               }
             }
           }
 
-          const helperColor = isColliding ? 0xf43f5e : 0xeab308 // red vs yellow
-          const helper = new THREE.Box3Helper(box, new THREE.Color(helperColor))
-          scene.add(helper)
-          hitboxHelpersRef.current.push(helper)
+          const color = (isCollidingGround || isCollidingObj || isCollidingSelf) ? 0xf43f5e : 0xeab308
+          const wireframe = createOBBWireframe(obb, color)
+          scene.add(wireframe)
+          hitboxHelpersRef.current.push(wireframe)
         }
 
-        // Auxiliary objects
+        // Auxiliary objects still shown as AABB Box3Helper
         for (const obj of activeObjects) {
           let isColliding = false
-          for (const linkBox of linkBoxesMap.values()) {
-            if (obj.box.intersectsBox(linkBox)) {
-              isColliding = true
-              break
-            }
+          for (const obb of linkOBBMap.values()) {
+            if (obb.intersectsBox3(obj.box)) { isColliding = true; break }
           }
-          const helperColor = isColliding ? 0xf43f5e : 0x10b981 // red vs green
-          const helper = new THREE.Box3Helper(obj.box, new THREE.Color(helperColor))
+          const color = isColliding ? 0xf43f5e : 0x10b981
+          const helper = new THREE.Box3Helper(obj.box, new THREE.Color(color)) as any as THREE.LineSegments
           scene.add(helper)
           hitboxHelpersRef.current.push(helper)
         }
       }
 
-      // 5. Find target object for distance measurement
+      // 5. Find target auxiliary object for arm-to-object distance measurement
       let targetObj: { id: string; name: string; box: THREE.Box3 } | null = null
       const selectedId = useSceneStore.getState().selectedObjectId
       if (selectedId) {
         targetObj = activeObjects.find(o => o.id === selectedId) || null
       }
-      
-      // If no selected object, pick the one closest to the robot base
       if (!targetObj && activeObjects.length > 0) {
-        const baseBox = linkBoxesMap.get('base_link') || Array.from(linkBoxesMap.values())[0]
-        if (baseBox) {
-          const baseCenter = new THREE.Vector3()
-          baseBox.getCenter(baseCenter)
-          let minD = Infinity
-          activeObjects.forEach(obj => {
-            const objCenter = new THREE.Vector3()
-            obj.box.getCenter(objCenter)
-            const d = baseCenter.distanceTo(objCenter)
-            if (d < minD) {
-              minD = d
-              targetObj = obj
-            }
-          })
-        } else {
-          targetObj = activeObjects[0]
-        }
+        let minD = Infinity
+        activeObjects.forEach(obj => {
+          // Use rough center-to-center distance for picking target object
+          const objCenter = new THREE.Vector3()
+          new THREE.Box3().copy(obj.box).getCenter(objCenter)
+          const baseOBB = linkOBBMap.get('base_link')
+          if (baseOBB) {
+            const d = baseOBB.center.distanceTo(objCenter)
+            if (d < minD) { minD = d; targetObj = obj }
+          } else {
+            targetObj = obj
+          }
+        })
       }
 
-      // 6. Compute distance and draw line from closest link to target object
-      if (targetObj && linkBoxesMap.size > 0) {
+      // 6. Arm-to-object distance measurement using OBB vs AABB
+      const SKIP_LINKS_OBJ = ['base_link', 'shoulder_link']
+      if (targetObj && linkOBBMap.size > 0) {
         let minDistance = Infinity
         let bestPoints: { pointA: THREE.Vector3; pointB: THREE.Vector3 } | null = null
         let closestLinkName = ''
 
-        for (const [linkName, box] of linkBoxesMap.entries()) {
-          // ignore base/shoulder for segment-to-object measurement to look cleaner
+        for (const [linkName, obb] of linkOBBMap.entries()) {
           const nameLower = linkName.toLowerCase()
-          if (nameLower.includes('base_link') || nameLower.includes('shoulder_link') || nameLower.includes('link1')) {
-            continue
-          }
-          const res = getBoxDistance(box, targetObj.box)
-          if (res.distance < minDistance) {
-            minDistance = res.distance
-            bestPoints = res
+          if (SKIP_LINKS_OBJ.some(s => nameLower.includes(s))) continue
+
+          // Approximate OBB-to-Box3 closest points:
+          // clamp OBB center onto the aux box, then clamp that point onto the OBB
+          const pointOnBox = targetObj.box.clampPoint(obb.center, new THREE.Vector3())
+          const pointOnOBB = new THREE.Vector3()
+          obb.clampPoint(pointOnBox, pointOnOBB)
+          const dist = pointOnOBB.distanceTo(pointOnBox)
+
+          if (dist < minDistance) {
+            minDistance = dist
+            bestPoints = { pointA: pointOnOBB, pointB: pointOnBox }
             closestLinkName = linkName
           }
         }
 
         if (bestPoints) {
-          const { pointA, pointB } = bestPoints
-          
-          // Update measure line position
-          measureLine.geometry.setFromPoints([pointA, pointB])
+          measureLine.geometry.setFromPoints([bestPoints.pointA, bestPoints.pointB])
           measureLine.computeLineDistances()
           measureLine.visible = true
 
-          // Calculate distance in mm
           const distanceMm = Math.round(minDistance * 1000)
 
-          // Display label at midpoint
           if (labelEl && textEl && containerRef.current) {
-            const midPoint = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5)
+            const midPoint = new THREE.Vector3().addVectors(bestPoints.pointA, bestPoints.pointB).multiplyScalar(0.5)
             midPoint.project(camera)
-
             const w = containerRef.current.clientWidth
             const h = containerRef.current.clientHeight
-            const x = (midPoint.x * 0.5 + 0.5) * w
-            const y = (-midPoint.y * 0.5 + 0.5) * h
-
-            // Friendly link name mapping
-            const linkViNames: Record<string, string> = {
-              'upperarm_link': 'Bắp tay',
-              'forearm_link': 'Khuỷu tay',
-              'wrist1_link': 'Cổ tay 1',
-              'wrist2_link': 'Cổ tay 2',
-              'wrist3_link': 'Cổ tay 3'
-            }
-            const linkEnNames: Record<string, string> = {
-              'upperarm_link': 'Upper Arm',
-              'forearm_link': 'Forearm',
-              'wrist1_link': 'Wrist 1',
-              'wrist2_link': 'Wrist 2',
-              'wrist3_link': 'Wrist 3'
-            }
-            const cleanLinkName = currentLanguage === 'vi' 
-              ? (Object.keys(linkViNames).find(k => closestLinkName.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => closestLinkName.toLowerCase().includes(k))!] : closestLinkName)
-              : (Object.keys(linkEnNames).find(k => closestLinkName.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => closestLinkName.toLowerCase().includes(k))!] : closestLinkName)
-
-            labelEl.style.left = `${x}px`
-            labelEl.style.top = `${y}px`
+            labelEl.style.left = `${(midPoint.x * 0.5 + 0.5) * w}px`
+            labelEl.style.top = `${(-midPoint.y * 0.5 + 0.5) * h}px`
             labelEl.style.display = 'flex'
 
+            const linkViNames: Record<string, string> = {
+              'upperarm_link': 'Bắp tay', 'forearm_link': 'Khuỷu tay',
+              'wrist1_link': 'Cổ tay 1', 'wrist2_link': 'Cổ tay 2', 'wrist3_link': 'Cổ tay 3'
+            }
+            const linkEnNames: Record<string, string> = {
+              'upperarm_link': 'Upper Arm', 'forearm_link': 'Forearm',
+              'wrist1_link': 'Wrist 1', 'wrist2_link': 'Wrist 2', 'wrist3_link': 'Wrist 3'
+            }
+            const nameMap = currentLanguage === 'vi' ? linkViNames : linkEnNames
+            const cleanName = Object.keys(nameMap).find(k => closestLinkName.toLowerCase().includes(k))
+              ? nameMap[Object.keys(nameMap).find(k => closestLinkName.toLowerCase().includes(k))!]
+              : closestLinkName
             const valStr = unit === 'm' ? `${(distanceMm / 1000).toFixed(3)} m` : `${distanceMm} mm`
-            textEl.innerHTML = `${cleanLinkName} ↔ ${targetObj.name}: ${valStr}`
+            textEl.innerHTML = `${cleanName} ↔ ${targetObj.name}: ${valStr}`
           }
         }
       } else {
@@ -863,85 +910,63 @@ export default function Viewport3D() {
         if (labelEl) labelEl.style.display = 'none'
       }
 
-      // 7. Compute self-collision distance measurement (Self-Distance)
-      if (linkBoxesMap.size > 0) {
+      // 7. Self-Distance measurement between non-adjacent robot links using OBB
+      if (linkOBBMap.size > 0) {
         let minSelfDistance = Infinity
         let bestSelfPoints: { pointA: THREE.Vector3; pointB: THREE.Vector3 } | null = null
         let selfLinkA = ''
         let selfLinkB = ''
 
         for (const pair of SELF_COLLISION_PAIRS) {
-          let boxA: THREE.Box3 | undefined
-          let boxB: THREE.Box3 | undefined
-          let keyA = ''
-          let keyB = ''
-
-          for (const [key, box] of linkBoxesMap.entries()) {
-            const keyLower = key.toLowerCase()
-            if (keyLower.includes(pair.a)) { boxA = box; keyA = key; }
-            if (keyLower.includes(pair.b)) { boxB = box; keyB = key; }
+          let obbA: OBB | undefined; let keyA = ''
+          let obbB: OBB | undefined; let keyB = ''
+          for (const [key, o] of linkOBBMap.entries()) {
+            const kl = key.toLowerCase()
+            if (kl.includes(pair.a)) { obbA = o; keyA = key }
+            if (kl.includes(pair.b)) { obbB = o; keyB = key }
           }
-
-          if (boxA && boxB) {
-            const res = getBoxDistance(boxA, boxB)
+          if (obbA && obbB) {
+            const res = getOBBDistance(obbA, obbB)
             if (res.distance < minSelfDistance) {
               minSelfDistance = res.distance
               bestSelfPoints = res
-              selfLinkA = keyA
-              selfLinkB = keyB
+              selfLinkA = keyA; selfLinkB = keyB
             }
           }
         }
 
         if (bestSelfPoints && minSelfDistance < Infinity) {
-          const { pointA, pointB } = bestSelfPoints
-          
-          selfMeasureLine.geometry.setFromPoints([pointA, pointB])
+          selfMeasureLine.geometry.setFromPoints([bestSelfPoints.pointA, bestSelfPoints.pointB])
           selfMeasureLine.computeLineDistances()
           selfMeasureLine.visible = true
 
           const selfDistanceMm = Math.round(minSelfDistance * 1000)
 
           if (selfLabelEl && selfTextEl && containerRef.current) {
-            const midPoint = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5)
+            const midPoint = new THREE.Vector3().addVectors(bestSelfPoints.pointA, bestSelfPoints.pointB).multiplyScalar(0.5)
             midPoint.project(camera)
-
             const w = containerRef.current.clientWidth
             const h = containerRef.current.clientHeight
-            const x = (midPoint.x * 0.5 + 0.5) * w
-            const y = (-midPoint.y * 0.5 + 0.5) * h
-
-            const linkViNames: Record<string, string> = {
-              'shoulder_link': 'Khớp vai',
-              'upperarm_link': 'Bắp tay',
-              'forearm_link': 'Khuỷu tay',
-              'wrist1_link': 'Cổ tay 1',
-              'wrist2_link': 'Cổ tay 2',
-              'wrist3_link': 'Cổ tay 3'
-            }
-            const linkEnNames: Record<string, string> = {
-              'shoulder_link': 'Shoulder',
-              'upperarm_link': 'Upper Arm',
-              'forearm_link': 'Forearm',
-              'wrist1_link': 'Wrist 1',
-              'wrist2_link': 'Wrist 2',
-              'wrist3_link': 'Wrist 3'
-            }
-
-            const cleanLinkA = currentLanguage === 'vi'
-              ? (Object.keys(linkViNames).find(k => selfLinkA.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => selfLinkA.toLowerCase().includes(k))!] : selfLinkA)
-              : (Object.keys(linkEnNames).find(k => selfLinkA.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => selfLinkA.toLowerCase().includes(k))!] : selfLinkA)
-
-            const cleanLinkB = currentLanguage === 'vi'
-              ? (Object.keys(linkViNames).find(k => selfLinkB.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB)
-              : (Object.keys(linkEnNames).find(k => selfLinkB.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB)
-
-            selfLabelEl.style.left = `${x}px`
-            selfLabelEl.style.top = `${y}px`
+            selfLabelEl.style.left = `${(midPoint.x * 0.5 + 0.5) * w}px`
+            selfLabelEl.style.top = `${(-midPoint.y * 0.5 + 0.5) * h}px`
             selfLabelEl.style.display = 'flex'
 
+            const linkViNames: Record<string, string> = {
+              'shoulder_link': 'Khớp vai', 'upperarm_link': 'Bắp tay', 'forearm_link': 'Khuỷu tay',
+              'wrist1_link': 'Cổ tay 1', 'wrist2_link': 'Cổ tay 2', 'wrist3_link': 'Cổ tay 3'
+            }
+            const linkEnNames: Record<string, string> = {
+              'shoulder_link': 'Shoulder', 'upperarm_link': 'Upper Arm', 'forearm_link': 'Forearm',
+              'wrist1_link': 'Wrist 1', 'wrist2_link': 'Wrist 2', 'wrist3_link': 'Wrist 3'
+            }
+            const nameMap = currentLanguage === 'vi' ? linkViNames : linkEnNames
+            const cleanA = Object.keys(nameMap).find(k => selfLinkA.toLowerCase().includes(k))
+              ? nameMap[Object.keys(nameMap).find(k => selfLinkA.toLowerCase().includes(k))!] : selfLinkA
+            const cleanB = Object.keys(nameMap).find(k => selfLinkB.toLowerCase().includes(k))
+              ? nameMap[Object.keys(nameMap).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB
+
             const valStr = unit === 'm' ? `${(selfDistanceMm / 1000).toFixed(3)} m` : `${selfDistanceMm} mm`
-            selfTextEl.innerHTML = `${cleanLinkA} ↔ ${cleanLinkB}: ${valStr}`
+            selfTextEl.innerHTML = `${cleanA} ↔ ${cleanB}: ${valStr}`
           }
         } else {
           selfMeasureLine.visible = false
@@ -952,6 +977,8 @@ export default function Viewport3D() {
         if (selfLabelEl) selfLabelEl.style.display = 'none'
       }
     }
+
+
 
     // Animation Loop
     let animationFrameId: number
@@ -1036,92 +1063,64 @@ export default function Viewport3D() {
     const robot = robotRef.current
     if (!robot) return
 
-    // Helper to find the link name of a mesh
-    const getMeshLinkName = (mesh: THREE.Object3D): string | null => {
-      let obj: THREE.Object3D | null = mesh
-      while (obj) {
-        if (obj.name && (obj.name.toLowerCase().includes('link') || obj.name.toLowerCase().includes('base'))) {
-          return obj.name
-        }
-        obj = obj.parent
+    // 1. Compute OBB for each named URDF link, stopping traversal at link boundaries
+    const allLinkObjs = new Set<THREE.Object3D>(
+      Object.values(robot.links as Record<string, THREE.Object3D>)
+    )
+    const linkOBBMap = new Map<string, OBB>()
+    if (robot.links) {
+      for (const [name, linkObj] of Object.entries(robot.links as Record<string, THREE.Object3D>)) {
+        const obb = computeLinkOBB(linkObj, allLinkObjs)
+        if (obb) linkOBBMap.set(name, obb)
       }
-      return null
     }
 
-    const linkBoxesMap = new Map<string, THREE.Box3>()
-    
-    // Group all mesh bounding boxes by their respective URDF link names
-    robot.traverse((child: any) => {
-      if (child.isMesh) {
-        const linkName = getMeshLinkName(child)
-        if (linkName) {
-          child.geometry.computeBoundingBox()
-          if (child.geometry.boundingBox) {
-            const meshBox = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld)
-            if (linkBoxesMap.has(linkName)) {
-              linkBoxesMap.get(linkName)!.union(meshBox)
-            } else {
-              linkBoxesMap.set(linkName, meshBox)
-            }
-          }
-        }
-      }
-    })
-
-    // 1. Ground Collision Detection (y < 0.005 meters, i.e., 5mm, ignoring base_link and shoulder_link)
+    // 2. Ground Collision Detection: check if any link's OBB min Y < 5mm
+    //    Approximate by checking the 8 corners of the OBB
     let groundCollide = false
-    const groundY = 0.005
-    for (const [linkName, box] of linkBoxesMap.entries()) {
-      const nameLower = linkName.toLowerCase()
-      if (nameLower.includes('base_link') || nameLower.includes('shoulder_link') || nameLower.includes('link1')) {
-        continue
+    const SKIP_LINKS_GROUND = ['base_link', 'shoulder_link']
+    for (const [linkName, obb] of linkOBBMap.entries()) {
+      if (SKIP_LINKS_GROUND.some(s => linkName.toLowerCase().includes(s))) continue
+      const { center, halfSize, rotation } = obb
+      let minY = Infinity
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+        const corner = new THREE.Vector3(sx * halfSize.x, sy * halfSize.y, sz * halfSize.z)
+          .applyMatrix3(rotation).add(center)
+        if (corner.y < minY) minY = corner.y
       }
-      if (box.min.y < groundY) {
-        groundCollide = true
-        break
-      }
+      if (minY < 0.005) { groundCollide = true; break }
     }
 
-    // 2. Self Collision Detection (ignoring adjacent links and close wrist couples to avoid false positives)
+    // 3. Self Collision Detection using OBB
     let selfCollide = false
-
     for (const pair of SELF_COLLISION_PAIRS) {
-      let boxA: THREE.Box3 | undefined
-      let boxB: THREE.Box3 | undefined
-
-      for (const [key, box] of linkBoxesMap.entries()) {
-        const keyLower = key.toLowerCase()
-        if (keyLower.includes(pair.a)) boxA = box
-        if (keyLower.includes(pair.b)) boxB = box
+      let obbA: OBB | undefined
+      let obbB: OBB | undefined
+      for (const [key, obb] of linkOBBMap.entries()) {
+        const kl = key.toLowerCase()
+        if (kl.includes(pair.a)) obbA = obb
+        if (kl.includes(pair.b)) obbB = obb
       }
-
-      if (boxA && boxB && boxA.intersectsBox(boxB)) {
-        selfCollide = true
-        break
+      if (obbA && obbB && obbA.intersectsOBB(obbB)) {
+        selfCollide = true; break
       }
     }
 
-    // 3. Object Collision Detection (with imported auxiliary 3D objects)
+    // 4. Object Collision Detection using OBB.intersectsBox3
     let objectCollide = false
     if (loadedObjectsRef.current.size > 0) {
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
         if (!storeObj || !storeObj.visible) continue
-
         const objBox = new THREE.Box3().setFromObject(threeObj)
-
-        for (const linkBox of linkBoxesMap.values()) {
-          if (linkBox.intersectsBox(objBox)) {
-            objectCollide = true
-            break
-          }
+        for (const obb of linkOBBMap.values()) {
+          if (obb.intersectsBox3(objBox)) { objectCollide = true; break }
         }
         if (objectCollide) break
       }
     }
 
     const isColliding = groundCollide || selfCollide || objectCollide
-
     if (useSceneStore.getState().collisionWarning !== isColliding) {
       setCollisionWarning(isColliding)
     }
