@@ -71,8 +71,14 @@ export function generateLua(steps: WorkflowStep[], projectName: string = 'Unname
       case 'SetDO':
         const doIdx = step.doIndex !== undefined ? step.doIndex : 1
         const doVal = step.doValue !== undefined ? step.doValue : 1
-        // Format: SetDO(index, status, block)
-        lua += `SetDO(${doIdx}, ${doVal}, 0)\n`
+        const doType = step.doType || 'cabinet'
+        if (doType === 'tool') {
+          // Format: SetToolDO(id, status, smooth, block)
+          lua += `SetToolDO(${doIdx}, ${doVal}, 0, 0)\n`
+        } else {
+          // Format: SetDO(index, status, block)
+          lua += `SetDO(${doIdx}, ${doVal}, 0)\n`
+        }
         break
 
       case 'WaitMs':

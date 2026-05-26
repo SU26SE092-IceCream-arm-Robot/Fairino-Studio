@@ -25,6 +25,7 @@ export default function WorkflowPanel() {
   const selectedStepId = useRobotStore((state) => state.selectedStepId)
   const setSelectedStepId = useRobotStore((state) => state.setSelectedStepId)
   const setJointAngles = useRobotStore((state) => state.setJointAngles)
+  const updateStep = useRobotStore((state) => state.updateStep)
 
   // Mode state
   const mode = useRobotStore((state) => state.mode)
@@ -57,11 +58,12 @@ export default function WorkflowPanel() {
   const handleAddDO = () => {
     addStep({
       type: 'SetDO',
-      label: language === 'vi' ? 'Cài đặt Digital Output' : 'Set Digital Output',
+      label: language === 'vi' ? 'Cài đặt DO 1' : 'Set DO 1',
       speed: 0,
       acc: 0,
       doIndex: 1,
-      doValue: 1
+      doValue: 1,
+      doType: 'cabinet'
     })
   }
 
@@ -282,14 +284,80 @@ export default function WorkflowPanel() {
                           Q: [{step.jointAngles.map(v => angleUnit === 'rad' ? (v * Math.PI / 180).toFixed(2) : Math.round(v)).join(', ')}] {angleUnit === 'rad' ? 'rad' : '°'}
                         </div>
                       )}
-                      {step.delayMs && (
-                        <div className="mt-1 text-[10px] text-slate-400 font-mono">
-                          {language === 'vi' ? 'Thời gian trễ' : 'Delay'}: {step.delayMs} ms
+                      {step.type === 'WaitMs' && step.delayMs !== undefined && (
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-slate-400" onClick={e => e.stopPropagation()}>
+                          <span>{language === 'vi' ? 'Trễ:' : 'Delay:'}</span>
+                          <input
+                            type="number"
+                            value={step.delayMs}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value) || 0
+                              updateStep(step.id, {
+                                delayMs: val,
+                                label: language === 'vi' ? `Đợi trễ ${val}ms` : `Wait ${val}ms`
+                              })
+                            }}
+                            disabled={isPlaying}
+                            className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 w-16 text-center text-[10px] font-mono font-bold text-white outline-none"
+                          />
+                          <span>ms</span>
                         </div>
                       )}
-                      {step.doIndex !== undefined && (
-                        <div className="mt-1 text-[10px] text-slate-400 font-mono">
-                          DO {step.doIndex} = {step.doValue}
+                      {step.type === 'SetDO' && step.doIndex !== undefined && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400" onClick={e => e.stopPropagation()}>
+                          <select
+                            value={step.doType || 'cabinet'}
+                            onChange={(e) => {
+                              const newType = e.target.value as 'cabinet' | 'tool'
+                              const newIdx = newType === 'tool' ? 0 : 1
+                              updateStep(step.id, {
+                                doType: newType,
+                                doIndex: newIdx,
+                                label: language === 'vi'
+                                  ? `Cài đặt ${newType === 'tool' ? 'Tool DO' : 'DO'} ${newIdx}`
+                                  : `Set ${newType === 'tool' ? 'Tool DO' : 'DO'} ${newIdx}`
+                              })
+                            }}
+                            disabled={isPlaying}
+                            className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[10px] text-white font-semibold outline-none cursor-pointer"
+                          >
+                            <option value="cabinet">{t('cabinetDO')}</option>
+                            <option value="tool">{t('toolDO')}</option>
+                          </select>
+                          <select
+                            value={step.doIndex}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value)
+                              const type = step.doType || 'cabinet'
+                              updateStep(step.id, {
+                                doIndex: val,
+                                label: language === 'vi'
+                                  ? `Cài đặt ${type === 'tool' ? 'Tool DO' : 'DO'} ${val}`
+                                  : `Set ${type === 'tool' ? 'Tool DO' : 'DO'} ${val}`
+                              })
+                            }}
+                            disabled={isPlaying}
+                            className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[10px] text-white font-semibold outline-none cursor-pointer"
+                          >
+                            {((step.doType || 'cabinet') === 'tool' ? [0, 1] : [1, 2, 3, 4, 5, 6, 7, 8]).map((num) => (
+                              <option key={num} value={num}>
+                                {(step.doType || 'cabinet') === 'tool' ? `End-DO ${num}` : `DO ${num}`}
+                              </option>
+                            ))}
+                          </select>
+                          <span>=</span>
+                          <select
+                            value={step.doValue ?? 1}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value) as 0 | 1
+                              updateStep(step.id, { doValue: val })
+                            }}
+                            disabled={isPlaying}
+                            className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-[10px] text-white font-semibold outline-none cursor-pointer"
+                          >
+                            <option value={1}>{t('turnOn')}</option>
+                            <option value={0}>{t('turnOff')}</option>
+                          </select>
                         </div>
                       )}
                     </div>

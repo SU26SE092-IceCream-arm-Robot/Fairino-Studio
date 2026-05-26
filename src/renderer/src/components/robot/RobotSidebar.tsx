@@ -4,6 +4,7 @@ import { JointAngles } from '../../types/robot.types'
 import ScenePanel from '../scene/ScenePanel'
 import { Settings, Cpu, HelpCircle } from 'lucide-react'
 import { translations } from '../../i18n/translations'
+import { useSceneStore } from '../../store/sceneStore'
 
 // Helper component for descriptive tooltips on technical terms
 const InfoTooltip = ({ text }: { text: string }) => (
@@ -19,7 +20,7 @@ const InfoTooltip = ({ text }: { text: string }) => (
 const JOINT_BOUNDS = [
   { min: -175, max: 175 },
   { min: -265, max: 85 },
-  { min: -162, max: 162 },
+  { min: -160, max: 160 },
   { min: -265, max: 85 },
   { min: -175, max: 175 },
   { min: -175, max: 175 }
@@ -40,6 +41,9 @@ export default function RobotSidebar() {
   const setLengthUnit = useRobotStore((state) => state.setLengthUnit)
   const angleUnit = useRobotStore((state) => state.angleUnit)
   const setAngleUnit = useRobotStore((state) => state.setAngleUnit)
+  
+  const isDebugHitbox = useSceneStore((state) => state.isDebugHitbox)
+  const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
 
   // Language translation helper
   const language = useRobotStore((state) => state.language)
@@ -169,6 +173,20 @@ export default function RobotSidebar() {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Debug & Visual controls */}
+          <div className="px-4 py-3 border-b border-[#2d2d34] bg-[#141417]/30 flex justify-between items-center shrink-0">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{t('debugHitbox')}</span>
+            <label className="relative inline-flex items-center cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={isDebugHitbox}
+                onChange={(e) => setDebugHitbox(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-[#25252b] rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:bg-white border border-[#393942] relative transition"></div>
+            </label>
           </div>
 
           {/* Joint Sliders */}

@@ -34,6 +34,7 @@ export interface WorkflowStep {
   // IO parameters
   doIndex?: number;
   doValue?: 0 | 1;
+  doType?: 'cabinet' | 'tool';
   // Delay parameters
   delayMs?: number;
   // Low-code Scratch parameters

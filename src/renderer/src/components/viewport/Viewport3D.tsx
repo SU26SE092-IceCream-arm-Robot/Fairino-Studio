@@ -19,6 +19,9 @@ export default function Viewport3D() {
   const transformControlsRef = useRef<any>(null)
   const dummyTargetRef = useRef<THREE.Object3D | null>(null)
   const boxHelperRef = useRef<THREE.BoxHelper | null>(null)
+  const measureLineRef = useRef<THREE.Line | null>(null)
+  const hitboxHelpersRef = useRef<THREE.Box3Helper[]>([])
+  const keysPressedRef = useRef<Set<string>>(new Set())
   const [isRobotLoaded, setIsRobotLoaded] = useState(false)
   
   // Track loaded 3D models: map objectId -> THREE.Object3D
@@ -88,6 +91,24 @@ export default function Viewport3D() {
     )
     const targetQuat = new THREE.Quaternion().setFromEuler(euler)
     return solveIK(targetPos, targetQuat, currentAngles as any, robot)
+  }
+
+  // Helper to calculate closest points and distance between two Box3 bounding boxes
+  const getBoxDistance = (boxA: THREE.Box3, boxB: THREE.Box3) => {
+    const centerA = new THREE.Vector3()
+    boxA.getCenter(centerA)
+    
+    const pointB = new THREE.Vector3()
+    boxB.clampPoint(centerA, pointB)
+    
+    const pointA = new THREE.Vector3()
+    boxA.clampPoint(pointB, pointA)
+    
+    return {
+      distance: pointA.distanceTo(pointB),
+      pointA,
+      pointB
+    }
   }
 
   // Automatically calculate jointAngles and tcpPose for all steps in the store (State Accumulator)
@@ -309,6 +330,21 @@ export default function Viewport3D() {
     scene.add(dummyTarget)
     dummyTargetRef.current = dummyTarget
 
+    // Measurement Line
+    const lineGeom = new THREE.BufferGeometry()
+    const lineMat = new THREE.LineDashedMaterial({
+      color: 0x3b82f6,
+      dashSize: 0.04,
+      gapSize: 0.02,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.8
+    })
+    const measureLine = new THREE.Line(lineGeom, lineMat)
+    measureLine.visible = false
+    scene.add(measureLine)
+    measureLineRef.current = measureLine
+
     // Transform Controls (IK, FK and Objects Gizmo)
     const transformControls = new TransformControls(camera, renderer.domElement)
     transformControls.size = 0.8
@@ -403,7 +439,7 @@ export default function Viewport3D() {
             const JOINT_LIMITS = [
               { min: -175, max: 175 },
               { min: -265, max: 85 },
-              { min: -162, max: 162 },
+              { min: -160, max: 160 },
               { min: -265, max: 85 },
               { min: -175, max: 175 },
               { min: -175, max: 175 }
@@ -424,24 +460,40 @@ export default function Viewport3D() {
       }
     })
 
-    // Keyboard shortcuts listener for switching Transform Gizmo modes (W: translate, E: rotate, R: scale)
+    // Keyboard shortcuts listener for WASD movement and Gizmo transform modes
     const handleKeyDown = (event: KeyboardEvent) => {
-      const selectedObjId = useSceneStore.getState().selectedObjectId
-      if (!selectedObjId || !transformControls) return
+      // Ignore when typing in input fields
+      const activeTag = document.activeElement?.tagName
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') {
+        return
+      }
 
-      switch (event.key.toLowerCase()) {
-        case 'w':
+      const key = event.key.toLowerCase()
+      if (['w', 'a', 's', 'd'].includes(key)) {
+        keysPressedRef.current.add(key)
+      }
+
+      const selectedObjId = useSceneStore.getState().selectedObjectId
+      if (selectedObjId && transformControls) {
+        if (key === '1') {
           transformControls.setMode('translate')
-          break
-        case 'e':
+        } else if (key === '2') {
           transformControls.setMode('rotate')
-          break
-        case 'r':
+        } else if (key === '3') {
           transformControls.setMode('scale')
-          break
+        }
       }
     }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      if (['w', 'a', 's', 'd'].includes(key)) {
+        keysPressedRef.current.delete(key)
+      }
+    }
+
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
 
     // Load URDF Robot
     const loader = new URDFLoader()
@@ -560,8 +612,236 @@ export default function Viewport3D() {
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
 
+    // Measurement and Hitbox update function in animation loop
+    const updateMeasurementAndHitboxes = () => {
+      const robot = robotRef.current
+      const scene = sceneRef.current
+      const measureLine = measureLineRef.current
+      if (!robot || !scene || !measureLine) return
+
+      const labelEl = document.getElementById('measure-label')
+      const textEl = document.getElementById('measure-text')
+
+      // Get latest state directly from stores
+      const unit = useRobotStore.getState().lengthUnit
+      const isDebug = useSceneStore.getState().isDebugHitbox
+      const currentLanguage = useRobotStore.getState().language
+
+      // 1. Gather all active visible auxiliary objects
+      const activeObjects: { id: string; name: string; box: THREE.Box3 }[] = []
+      for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
+        const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
+        if (storeObj && storeObj.visible) {
+          const box = new THREE.Box3().setFromObject(threeObj)
+          activeObjects.push({ id, name: storeObj.name, box })
+        }
+      }
+
+      // 2. Gather all link boxes of the robot arm
+      const getMeshLinkName = (mesh: THREE.Object3D): string | null => {
+        let obj: THREE.Object3D | null = mesh
+        while (obj) {
+          if (obj.name && (obj.name.toLowerCase().includes('link') || obj.name.toLowerCase().includes('base'))) {
+            return obj.name
+          }
+          obj = obj.parent
+        }
+        return null
+      }
+
+      const linkBoxesMap = new Map<string, THREE.Box3>()
+      robot.traverse((child: any) => {
+        if (child.isMesh) {
+          const linkName = getMeshLinkName(child)
+          if (linkName) {
+            child.geometry.computeBoundingBox()
+            if (child.geometry.boundingBox) {
+              const meshBox = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld)
+              if (linkBoxesMap.has(linkName)) {
+                linkBoxesMap.get(linkName)!.union(meshBox)
+              } else {
+                linkBoxesMap.set(linkName, meshBox)
+              }
+            }
+          }
+        }
+      })
+
+      // 3. Clear previous hitbox helpers
+      hitboxHelpersRef.current.forEach(h => {
+        scene.remove(h)
+        if (h.geometry) h.geometry.dispose()
+        if (Array.isArray(h.material)) h.material.forEach(m => m.dispose())
+        else if (h.material) h.material.dispose()
+      })
+      hitboxHelpersRef.current = []
+
+      // 4. Render hitboxes if debug is active
+      if (isDebug) {
+        // Robot links
+        for (const box of linkBoxesMap.values()) {
+          // Check if this link intersects any active object box
+          let isColliding = false
+          for (const obj of activeObjects) {
+            if (box.intersectsBox(obj.box)) {
+              isColliding = true
+              break
+            }
+          }
+          const helperColor = isColliding ? 0xf43f5e : 0xeab308 // red vs yellow
+          const helper = new THREE.Box3Helper(box, new THREE.Color(helperColor))
+          scene.add(helper)
+          hitboxHelpersRef.current.push(helper)
+        }
+
+        // Auxiliary objects
+        for (const obj of activeObjects) {
+          let isColliding = false
+          for (const linkBox of linkBoxesMap.values()) {
+            if (obj.box.intersectsBox(linkBox)) {
+              isColliding = true
+              break
+            }
+          }
+          const helperColor = isColliding ? 0xf43f5e : 0x10b981 // red vs green
+          const helper = new THREE.Box3Helper(obj.box, new THREE.Color(helperColor))
+          scene.add(helper)
+          hitboxHelpersRef.current.push(helper)
+        }
+      }
+
+      // 5. Find target object for distance measurement
+      let targetObj: { id: string; name: string; box: THREE.Box3 } | null = null
+      const selectedId = useSceneStore.getState().selectedObjectId
+      if (selectedId) {
+        targetObj = activeObjects.find(o => o.id === selectedId) || null
+      }
+      
+      // If no selected object, pick the one closest to the robot base
+      if (!targetObj && activeObjects.length > 0) {
+        const baseBox = linkBoxesMap.get('base_link') || Array.from(linkBoxesMap.values())[0]
+        if (baseBox) {
+          const baseCenter = new THREE.Vector3()
+          baseBox.getCenter(baseCenter)
+          let minD = Infinity
+          activeObjects.forEach(obj => {
+            const objCenter = new THREE.Vector3()
+            obj.box.getCenter(objCenter)
+            const d = baseCenter.distanceTo(objCenter)
+            if (d < minD) {
+              minD = d
+              targetObj = obj
+            }
+          })
+        } else {
+          targetObj = activeObjects[0]
+        }
+      }
+
+      // 6. Compute distance and draw line from closest link to target object
+      if (targetObj && linkBoxesMap.size > 0) {
+        let minDistance = Infinity
+        let bestPoints: { pointA: THREE.Vector3; pointB: THREE.Vector3 } | null = null
+        let closestLinkName = ''
+
+        for (const [linkName, box] of linkBoxesMap.entries()) {
+          // ignore base/shoulder for segment-to-object measurement to look cleaner
+          const nameLower = linkName.toLowerCase()
+          if (nameLower.includes('base_link') || nameLower.includes('shoulder_link') || nameLower.includes('link1')) {
+            continue
+          }
+          const res = getBoxDistance(box, targetObj.box)
+          if (res.distance < minDistance) {
+            minDistance = res.distance
+            bestPoints = res
+            closestLinkName = linkName
+          }
+        }
+
+        if (bestPoints) {
+          const { pointA, pointB } = bestPoints
+          
+          // Update measure line position
+          measureLine.geometry.setFromPoints([pointA, pointB])
+          measureLine.computeLineDistances()
+          measureLine.visible = true
+
+          // Calculate distance in mm
+          const distanceMm = Math.round(minDistance * 1000)
+
+          // Display label at midpoint
+          if (labelEl && textEl && containerRef.current) {
+            const midPoint = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5)
+            midPoint.project(camera)
+
+            const w = containerRef.current.clientWidth
+            const h = containerRef.current.clientHeight
+            const x = (midPoint.x * 0.5 + 0.5) * w
+            const y = (-midPoint.y * 0.5 + 0.5) * h
+
+            // Friendly link name mapping
+            const linkViNames: Record<string, string> = {
+              'upperarm_link': 'Bắp tay',
+              'forearm_link': 'Khuỷu tay',
+              'wrist1_link': 'Cổ tay 1',
+              'wrist2_link': 'Cổ tay 2',
+              'wrist3_link': 'Cổ tay 3'
+            }
+            const linkEnNames: Record<string, string> = {
+              'upperarm_link': 'Upper Arm',
+              'forearm_link': 'Forearm',
+              'wrist1_link': 'Wrist 1',
+              'wrist2_link': 'Wrist 2',
+              'wrist3_link': 'Wrist 3'
+            }
+            const cleanLinkName = currentLanguage === 'vi' 
+              ? (Object.keys(linkViNames).find(k => closestLinkName.toLowerCase().includes(k)) ? linkViNames[Object.keys(linkViNames).find(k => closestLinkName.toLowerCase().includes(k))!] : closestLinkName)
+              : (Object.keys(linkEnNames).find(k => closestLinkName.toLowerCase().includes(k)) ? linkEnNames[Object.keys(linkEnNames).find(k => closestLinkName.toLowerCase().includes(k))!] : closestLinkName)
+
+            labelEl.style.left = `${x}px`
+            labelEl.style.top = `${y}px`
+            labelEl.style.display = 'flex'
+
+            const valStr = unit === 'm' ? `${(distanceMm / 1000).toFixed(3)} m` : `${distanceMm} mm`
+            textEl.innerHTML = `${cleanLinkName} ↔ ${targetObj.name}: ${valStr}`
+          }
+        }
+      } else {
+        measureLine.visible = false
+        if (labelEl) labelEl.style.display = 'none'
+      }
+    }
+
     // Animation Loop
     let animationFrameId: number
+    // Real-time camera navigation via WASD keys on horizontal plane
+    const updateWASDNavigation = () => {
+      const keys = keysPressedRef.current
+      if (keys.size === 0) return
+
+      const moveSpeed = 0.015 // move speed per frame
+      const tempDir = new THREE.Vector3()
+      const tempRight = new THREE.Vector3()
+
+      // Horizontal camera forward direction
+      camera.getWorldDirection(tempDir)
+      tempDir.y = 0
+      tempDir.normalize()
+
+      // Horizontal camera right direction
+      tempRight.crossVectors(tempDir, camera.up).normalize()
+
+      const delta = new THREE.Vector3()
+      if (keys.has('w')) delta.addScaledVector(tempDir, moveSpeed)
+      if (keys.has('s')) delta.addScaledVector(tempDir, -moveSpeed)
+      if (keys.has('d')) delta.addScaledVector(tempRight, moveSpeed)
+      if (keys.has('a')) delta.addScaledVector(tempRight, -moveSpeed)
+
+      camera.position.add(delta)
+      controls.target.add(delta)
+      controls.update()
+    }
+
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
@@ -571,8 +851,14 @@ export default function Viewport3D() {
         boxHelperRef.current.update()
       }
 
+      // Perform WASD Camera Navigation
+      updateWASDNavigation()
+
       // Perform collision detection
       checkCollisions()
+
+      // Update measurement line and debug hitboxes
+      updateMeasurementAndHitboxes()
 
       renderer.render(scene, camera)
     }
@@ -594,6 +880,7 @@ export default function Viewport3D() {
       cancelAnimationFrame(animationFrameId)
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.dispose()
       transformControls.dispose()
@@ -840,7 +1127,7 @@ export default function Viewport3D() {
     const JOINT_LIMITS = [
       { min: -175, max: 175 },
       { min: -265, max: 85 },
-      { min: -162, max: 162 },
+      { min: -150, max: 150 },
       { min: -265, max: 85 },
       { min: -175, max: 175 },
       { min: -175, max: 175 }
@@ -1032,6 +1319,16 @@ export default function Viewport3D() {
 
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden">
+      {/* Dynamic measurement label */}
+      <div
+        id="measure-label"
+        className="absolute bg-[#1e1e24]/95 border border-blue-500/50 text-[10px] text-white px-2 py-1 rounded shadow-md pointer-events-none font-mono font-bold z-20 flex items-center gap-1.5"
+        style={{ display: 'none', transform: 'translate(-50%, -50%)' }}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+        <span id="measure-text">0 mm</span>
+      </div>
+
       {/* Collision Warning Overlay */}
       {collisionWarning && (
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-rose-600/95 text-white px-4 py-2.5 rounded-lg shadow-lg border border-rose-500 animate-pulse">
@@ -1040,18 +1337,23 @@ export default function Viewport3D() {
         </div>
       )}
 
-      {/* Helper floating shortcuts hint (only shown when an object is selected) */}
-      {selectedObjectId && (
-        <div className="absolute top-4 right-4 z-10 bg-[#1e1e24]/90 border border-blue-500/30 text-slate-300 px-3.5 py-2.5 rounded-lg shadow-xl backdrop-blur-sm max-w-[240px] pointer-events-none flex items-start gap-2">
-          <HelpCircle size={14} className="text-blue-400 shrink-0 mt-0.5" />
-          <div className="text-[10px] space-y-1">
-            <span className="font-bold text-white block">Phím tắt di chuyển vật thể:</span>
-            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">W</kbd> - Dịch chuyển (Translate)</div>
-            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">E</kbd> - Xoay (Rotate)</div>
-            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">R</kbd> - Co giãn (Scale)</div>
-          </div>
+      {/* Helper floating shortcuts hint */}
+      <div className="absolute top-4 right-4 z-10 bg-[#1e1e24]/90 border border-blue-500/30 text-slate-300 px-3.5 py-2.5 rounded-lg shadow-xl backdrop-blur-sm max-w-[240px] pointer-events-none flex items-start gap-2">
+        <HelpCircle size={14} className="text-blue-400 shrink-0 mt-0.5" />
+        <div className="text-[10px] space-y-1.5">
+          <span className="font-bold text-white block">Phím tắt điều hướng:</span>
+          <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">W</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">A</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">S</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">D</kbd> - Di chuyển Camera</div>
+          {selectedObjectId && (
+            <>
+              <div className="border-t border-white/10 my-1"></div>
+              <span className="font-bold text-white block">Thiết lập vật thể:</span>
+              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">1</kbd> - Dịch chuyển (Translate)</div>
+              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">2</kbd> - Xoay (Rotate)</div>
+              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">3</kbd> - Co giãn (Scale)</div>
+            </>
+          )}
         </div>
-      )}
+      </div>
 
       {/* IK Mode Instructions */}
       {isIKMode && (

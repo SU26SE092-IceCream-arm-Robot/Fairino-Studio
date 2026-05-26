@@ -2,12 +2,12 @@ import * as THREE from 'three'
 import { JointAngles } from '../../types/robot.types'
 
 const JOINT_LIMITS = [
-  { minRad: -175 * Math.PI / 180, maxRad: 175 * Math.PI / 180 }, // j1
-  { minRad: -265 * Math.PI / 180, maxRad: 85 * Math.PI / 180 },  // j2
-  { minRad: -162 * Math.PI / 180, maxRad: 162 * Math.PI / 180 }, // j3
-  { minRad: -265 * Math.PI / 180, maxRad: 85 * Math.PI / 180 },  // j4
-  { minRad: -175 * Math.PI / 180, maxRad: 175 * Math.PI / 180 }, // j5
-  { minRad: -175 * Math.PI / 180, maxRad: 175 * Math.PI / 180 }  // j6
+  { minRad: (-175 * Math.PI) / 180, maxRad: (175 * Math.PI) / 180 }, // j1
+  { minRad: (-265 * Math.PI) / 180, maxRad: (85 * Math.PI) / 180 }, // j2
+  { minRad: (-160 * Math.PI) / 180, maxRad: (160 * Math.PI) / 180 }, // j3
+  { minRad: (-265 * Math.PI) / 180, maxRad: (85 * Math.PI) / 180 }, // j4
+  { minRad: (-175 * Math.PI) / 180, maxRad: (175 * Math.PI) / 180 }, // j5
+  { minRad: (-175 * Math.PI) / 180, maxRad: (175 * Math.PI) / 180 } // j6
 ]
 
 // Gaussian elimination to solve Ax = B
@@ -73,28 +73,28 @@ export function solveIK(
   if (!robotObj) return null
 
   const jointNames = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
-  const joints = jointNames.map(name => robotObj.joints[name])
+  const joints = jointNames.map((name) => robotObj.joints[name])
   const baseLink = robotObj.links['base_link']
   const wristLink = robotObj.links['wrist3_link']
 
-  if (!baseLink || !wristLink || joints.some(j => !j)) return null
+  if (!baseLink || !wristLink || joints.some((j) => !j)) return null
 
   // Backup current joint states (use j.angle, fallback to jointValue, prevent NaN)
-  const backupAngles = joints.map(j => {
-    const val = j.angle !== undefined ? j.angle : (j.jointValue !== undefined ? j.jointValue : 0)
+  const backupAngles = joints.map((j) => {
+    const val = j.angle !== undefined ? j.angle : j.jointValue !== undefined ? j.jointValue : 0
     return isNaN(val) ? 0 : val
   })
 
   // Initialize joint working state in radians, prevent starting from NaN
-  const q = currentAngles.map(deg => {
-    const val = deg * Math.PI / 180
+  const q = currentAngles.map((deg) => {
+    const val = (deg * Math.PI) / 180
     return isNaN(val) ? 0 : val
   })
 
   const maxIterations = 20
   const tolerancePos = 0.0005 // 0.5 mm in meters
-  const toleranceRot = 0.001  // ~0.05 degrees in radians
-  const damping = 0.15       // Damping factor lambda (increased for singularity damping & smoothness)
+  const toleranceRot = 0.001 // ~0.05 degrees in radians
+  const damping = 0.15 // Damping factor lambda (increased for singularity damping & smoothness)
   for (let iter = 0; iter < maxIterations; iter++) {
     // 1. Update robot joints with current iterate q
     jointNames.forEach((name, idx) => {
@@ -153,7 +153,7 @@ export function solveIK(
         robotObj.joints[name].setJointValue(q[idx])
       })
       robotObj.updateMatrixWorld(true)
-      
+
       const relMatPlus = new THREE.Matrix4().multiplyMatrices(baseMatInv, wristLink.matrixWorld)
       const posPlus = new THREE.Vector3()
       const quatPlus = new THREE.Quaternion()
@@ -180,7 +180,10 @@ export function solveIK(
       // Rotational gradient (dRot/dq)
       const dq = new THREE.Quaternion().copy(quatPlus).multiply(quatMinus.clone().invert())
       if (dq.w < 0) {
-        dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w
+        dq.x = -dq.x
+        dq.y = -dq.y
+        dq.z = -dq.z
+        dq.w = -dq.w
       }
       const dAngle = 2 * Math.acos(Math.min(1, Math.max(-1, dq.w)))
       const dRot = new THREE.Vector3()
@@ -224,12 +227,12 @@ export function solveIK(
     let dq = solveLinearSystem(JTJ, JTe)
 
     // Check for NaN or Infinity in linear solver results
-    if (dq.some(val => isNaN(val) || !isFinite(val))) {
+    if (dq.some((val) => isNaN(val) || !isFinite(val))) {
       // Fallback to stable Jacobian Transpose method
       const alpha = 0.05 // safe step size
       dq = new Array(6).fill(0)
       for (let j = 0; j < 6; j++) {
-        let sum = 0;
+        let sum = 0
         for (let k = 0; k < 6; k++) {
           sum += J[k][j] * e[k]
         }
@@ -255,22 +258,22 @@ export function solveIK(
   // Limit joint angle change per frame (velocity clamp) to prevent sudden jumps or twists
   const maxStepPerFrame = 8 // degrees
   const finalAngles = q.map((rad, idx) => {
-    const deg = rad * 180 / Math.PI
+    const deg = (rad * 180) / Math.PI
     const prevDeg = currentAngles[idx]
-    
+
     let diff = deg - prevDeg
     // Normalize diff just in case
     if (diff > 180) diff -= 360
     if (diff < -180) diff += 360
-    
+
     const clampedDiff = Math.max(-maxStepPerFrame, Math.min(maxStepPerFrame, diff))
     const finalDeg = prevDeg + clampedDiff
 
     // Keep within hard joint limits
     const limit = JOINT_LIMITS[idx]
-    const minDeg = limit.minRad * 180 / Math.PI
-    const maxDeg = limit.maxRad * 180 / Math.PI
-    
+    const minDeg = (limit.minRad * 180) / Math.PI
+    const maxDeg = (limit.maxRad * 180) / Math.PI
+
     return Math.round(Math.max(minDeg, Math.min(maxDeg, finalDeg)) * 10) / 10
   }) as JointAngles
 

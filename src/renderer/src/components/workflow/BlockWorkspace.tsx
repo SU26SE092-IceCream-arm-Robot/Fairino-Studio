@@ -110,7 +110,8 @@ export default function BlockWorkspace() {
           ...newStepParams,
           label: `${t('setDOBlock')} 1`,
           doIndex: 1,
-          doValue: 1
+          doValue: 1,
+          doType: 'cabinet'
         }
         break
       case 'WaitMs':
@@ -194,7 +195,8 @@ export default function BlockWorkspace() {
             ...newStepParams,
             label: `${t('setDOBlock')} 1`,
             doIndex: 1,
-            doValue: 1
+            doValue: 1,
+            doType: 'cabinet'
           }
           break
         case 'WaitMs':
@@ -483,22 +485,45 @@ export default function BlockWorkspace() {
                   )}
 
                   {step.type === 'SetDO' && (
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <span>{t('setDOBlock')}</span>
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
                       <select
-                        value={step.doIndex || 1}
+                        value={step.doType || 'cabinet'}
                         onChange={(e) => {
-                          const val = parseInt(e.target.value)
+                          const newType = e.target.value as 'cabinet' | 'tool'
+                          const newIdx = newType === 'tool' ? 0 : 1
                           updateStep(step.id, {
-                            doIndex: val,
-                            label: `${t('setDOBlock')} ${val}`
+                            doType: newType,
+                            doIndex: newIdx,
+                            label: language === 'vi'
+                              ? `Cài đặt ${newType === 'tool' ? 'Tool DO' : 'DO'} ${newIdx}`
+                              : `Set ${newType === 'tool' ? 'Tool DO' : 'DO'} ${newIdx}`
                           })
                         }}
                         disabled={isPlaying}
                         className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white font-semibold outline-none cursor-pointer"
                       >
-                        {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => (
-                          <option key={num} value={num}>DO {num}</option>
+                        <option value="cabinet">{t('cabinetDO')}</option>
+                        <option value="tool">{t('toolDO')}</option>
+                      </select>
+                      <select
+                        value={step.doIndex ?? 1}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value)
+                          const type = step.doType || 'cabinet'
+                          updateStep(step.id, {
+                            doIndex: val,
+                            label: language === 'vi'
+                              ? `Cài đặt ${type === 'tool' ? 'Tool DO' : 'DO'} ${val}`
+                              : `Set ${type === 'tool' ? 'Tool DO' : 'DO'} ${val}`
+                          })
+                        }}
+                        disabled={isPlaying}
+                        className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white font-semibold outline-none cursor-pointer"
+                      >
+                        {((step.doType || 'cabinet') === 'tool' ? [0, 1] : [1, 2, 3, 4, 5, 6, 7, 8]).map((num) => (
+                          <option key={num} value={num}>
+                            {(step.doType || 'cabinet') === 'tool' ? `End-DO ${num}` : `DO ${num}`}
+                          </option>
                         ))}
                       </select>
                       <span>{language === 'vi' ? 'thành' : 'to'}</span>
