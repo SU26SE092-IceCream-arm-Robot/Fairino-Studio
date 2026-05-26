@@ -78,6 +78,16 @@ export const translations = {
     // Settings menu
     language: 'Ngôn ngữ',
     settings: 'Cài đặt',
+
+    // Tooltips
+    tooltipFK: 'Động học thuận (Joint Space): Điều khiển robot bằng cách xoay trực tiếp từng khớp đơn lẻ (khớp 1 đến 6).',
+    tooltipIK: 'Động học nghịch (Cartesian Space): Điều khiển robot bằng cách kéo thả toạ độ đầu gắp (X, Y, Z). Các khớp sẽ tự động tính toán xoay theo.',
+    tooltipTCP: 'Tool Center Point: Điểm trung tâm của dụng cụ đầu gắp robot, xác định toạ độ làm việc thực tế của robot trong không gian.',
+    tooltipMoveJ: 'Di chuyển nội suy khớp: Robot quay các khớp đồng thời để đầu gắp đi tới đích theo đường cong tự nhiên. Tốc độ nhanh và tránh vật cản tốt.',
+    tooltipMoveL: 'Di chuyển nội suy thẳng: Robot di chuyển đầu gắp đi tới đích theo một đường thẳng tuyệt đối. Thường dùng khi cần cắt, hàn, hoặc gắp đặt thẳng đứng.',
+    tooltipDO: 'Digital Output (Cổng ra kỹ thuật số): Cổng tín hiệu điện dùng để điều khiển thiết bị ngoại vi như bật/tắt bơm, van khí, hay tay gắp.',
+    tooltipDOVal: 'Tín hiệu DO: Cài đặt trạng thái cổng DO. Trạng thái 1 (BẬT) kích hoạt thiết bị, trạng thái 0 (T T) ngắt hoạt động thiết bị.',
+    tooltipDelay: 'Đợi trễ: Tạm dừng chương trình trong một khoảng thời gian xác định (tính bằng mili-giây, 1s = 1000ms) trước khi thực hiện bước tiếp theo.',
   },
   en: {
     // Header
@@ -158,6 +168,16 @@ export const translations = {
     // Settings menu
     language: 'Language',
     settings: 'Settings',
+
+    // Tooltips
+    tooltipFK: 'Forward Kinematics (Joint Space): Control the robot by directly rotating individual joints (Joints 1 to 6).',
+    tooltipIK: 'Inverse Kinematics (Cartesian Space): Control the robot by dragging the end-effector (X, Y, Z) coordinates. Joint rotations are computed automatically.',
+    tooltipTCP: 'Tool Center Point: The center point of the robot gripper/tool, defining the actual working coordinates of the robot in space.',
+    tooltipMoveJ: 'Joint Motion: The robot rotates joints simultaneously to move the end-effector to the target in a natural curve. Fast and good for obstacle avoidance.',
+    tooltipMoveL: 'Linear Motion: The robot moves the end-effector to the target in an absolute straight line. Commonly used for welding, cutting, or vertical pick & place.',
+    tooltipDO: 'Digital Output: Electrical signal port used to control peripheral devices like turning on/off pumps, pneumatic valves, or grippers.',
+    tooltipDOVal: 'DO Signal State: Sets the DO port value. Value 1 (ON) activates the device, Value 0 (OFF) deactivates it.',
+    tooltipDelay: 'Delay: Pauses the execution of the program for a specified time (in milliseconds, 1s = 1000ms) before continuing to the next step.',
   }
 }
 

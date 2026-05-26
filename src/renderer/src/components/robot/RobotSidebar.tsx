@@ -2,8 +2,19 @@ import { useState } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { JointAngles } from '../../types/robot.types'
 import ScenePanel from '../scene/ScenePanel'
-import { Settings, Cpu } from 'lucide-react'
+import { Settings, Cpu, HelpCircle } from 'lucide-react'
 import { translations } from '../../i18n/translations'
+
+// Helper component for descriptive tooltips on technical terms
+const InfoTooltip = ({ text }: { text: string }) => (
+  <div className="relative group inline-block align-middle select-none shrink-0" onClick={e => e.stopPropagation()}>
+    <HelpCircle size={11} className="text-slate-400 hover:text-slate-200 cursor-help transition" />
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-56 bg-[#121214]/95 border border-[#2d2d34] text-[10px] text-slate-300 p-2.5 rounded-lg shadow-2xl backdrop-blur-md z-[100] pointer-events-none font-normal leading-relaxed normal-case">
+      {text}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#121214]" />
+    </div>
+  </div>
+)
 
 const JOINT_BOUNDS = [
   { min: -175, max: 175 },
@@ -90,24 +101,25 @@ export default function RobotSidebar() {
             <div className="grid grid-cols-2 gap-2 mt-2 bg-[#121214] p-1 rounded-lg">
               <button
                 onClick={() => setIKMode(false)}
-                className={`py-1.5 px-3 rounded-md text-xs font-medium transition ${
+                className={`py-1.5 px-2 rounded-md text-xs font-medium transition flex items-center justify-center gap-1 ${
                   !isIKMode
                     ? 'bg-blue-600 text-white shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
                 Joint (FK)
+                <InfoTooltip text={t('tooltipFK')} />
               </button>
               <button
                 onClick={() => setIKMode(true)}
-                className={`py-1.5 px-3 rounded-md text-xs font-medium transition ${
+                className={`py-1.5 px-2 rounded-md text-xs font-medium transition flex items-center justify-center gap-1 ${
                   isIKMode
                     ? 'bg-blue-600 text-white shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
-                title="Điều khiển đầu gắp robot bằng kéo thả Gizmo (IK)"
               >
                 Cartesian (IK)
+                <InfoTooltip text={t('tooltipIK')} />
               </button>
             </div>
           </div>
@@ -218,8 +230,9 @@ export default function RobotSidebar() {
 
           {/* TCP Cartesian Coordinates Display */}
           <div className="p-4 border-t border-[#2d2d34] bg-[#141417] shrink-0">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-3">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-3">
               {t('toolCenterPoint')}
+              <InfoTooltip text={t('tooltipTCP')} />
             </span>
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">

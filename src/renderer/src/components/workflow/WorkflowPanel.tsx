@@ -1,8 +1,19 @@
 import { useRobotStore } from '../../store/robotStore'
 import { WorkflowStep } from '../../types/robot.types'
-import { Play, Pause, Square, Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles } from 'lucide-react'
+import { Play, Pause, Square, Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles, HelpCircle } from 'lucide-react'
 import BlockWorkspace from './BlockWorkspace'
 import { translations } from '../../i18n/translations'
+
+// Helper component for descriptive tooltips on technical terms
+const InfoTooltip = ({ text }: { text: string }) => (
+  <div className="relative group inline-block align-middle select-none shrink-0" onClick={e => e.stopPropagation()}>
+    <HelpCircle size={11} className="text-slate-400 hover:text-slate-200 cursor-help transition" />
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-56 bg-[#121214]/95 border border-[#2d2d34] text-[10px] text-slate-300 p-2.5 rounded-lg shadow-2xl backdrop-blur-md z-[100] pointer-events-none font-normal leading-relaxed normal-case">
+      {text}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#121214]" />
+    </div>
+  </div>
+)
 
 export default function WorkflowPanel() {
   const steps = useRobotStore((state) => state.steps)
@@ -189,15 +200,17 @@ export default function WorkflowPanel() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => handleRecordWaypoint('MoveJ')}
-                className="flex items-center justify-center gap-1.5 py-2 px-3 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-bold text-white transition shadow-md cursor-pointer"
+                className="flex items-center justify-center gap-1 py-2 px-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-bold text-white transition shadow-md cursor-pointer"
               >
-                <Plus size={14} /> {t('recordMoveJ')}
+                <Plus size={12} /> {t('recordMoveJ')}
+                <InfoTooltip text={t('tooltipMoveJ')} />
               </button>
               <button
                 onClick={() => handleRecordWaypoint('MoveL')}
-                className="flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow-md cursor-pointer"
+                className="flex items-center justify-center gap-1 py-2 px-1 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow-md cursor-pointer"
               >
-                <Plus size={14} /> {t('recordMoveL')}
+                <Plus size={12} /> {t('recordMoveL')}
+                <InfoTooltip text={t('tooltipMoveL')} />
               </button>
             </div>
           </div>
@@ -209,12 +222,14 @@ export default function WorkflowPanel() {
               className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#25252b] hover:bg-[#2e2e36] text-[11px] font-semibold rounded border border-[#393942] cursor-pointer"
             >
               + {t('setDO')}
+              <InfoTooltip text={t('tooltipDO')} />
             </button>
             <button
               onClick={handleAddDelay}
               className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#25252b] hover:bg-[#2e2e36] text-[11px] font-semibold rounded border border-[#393942] cursor-pointer"
             >
               + {t('waitDelay')}
+              <InfoTooltip text={t('tooltipDelay')} />
             </button>
           </div>
 

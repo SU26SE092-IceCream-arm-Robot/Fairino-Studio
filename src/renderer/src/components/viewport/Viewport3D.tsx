@@ -603,43 +603,109 @@ export default function Viewport3D() {
     }
   }, [])
 
-  // Bounding box collision detection
+  // Bounding box collision detection (Ground, Self, and Object collision)
   const checkCollisions = () => {
     const robot = robotRef.current
-    if (!robot || loadedObjectsRef.current.size === 0) {
-      if (useSceneStore.getState().collisionWarning) {
-        setCollisionWarning(false)
+    if (!robot) return
+
+    // Helper to find the link name of a mesh
+    const getMeshLinkName = (mesh: THREE.Object3D): string | null => {
+      let obj: THREE.Object3D | null = mesh
+      while (obj) {
+        if (obj.name && (obj.name.toLowerCase().includes('link') || obj.name.toLowerCase().includes('base'))) {
+          return obj.name
+        }
+        obj = obj.parent
       }
-      return
+      return null
     }
 
-    let isColliding = false
-    const robotBoxes: THREE.Box3[] = []
-
+    const linkBoxesMap = new Map<string, THREE.Box3>()
+    
+    // Group all mesh bounding boxes by their respective URDF link names
     robot.traverse((child: any) => {
-      if (child.isMesh && child.name && child.name.includes('link') && !child.name.includes('base_link')) {
-        child.geometry.computeBoundingBox()
-        if (child.geometry.boundingBox) {
-          const box = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld)
-          robotBoxes.push(box)
+      if (child.isMesh) {
+        const linkName = getMeshLinkName(child)
+        if (linkName) {
+          child.geometry.computeBoundingBox()
+          if (child.geometry.boundingBox) {
+            const meshBox = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld)
+            if (linkBoxesMap.has(linkName)) {
+              linkBoxesMap.get(linkName)!.union(meshBox)
+            } else {
+              linkBoxesMap.set(linkName, meshBox)
+            }
+          }
         }
       }
     })
 
-    for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
-      const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
-      if (!storeObj || !storeObj.visible) continue
-
-      const objBox = new THREE.Box3().setFromObject(threeObj)
-
-      for (const rBox of robotBoxes) {
-        if (rBox.intersectsBox(objBox)) {
-          isColliding = true
-          break
-        }
+    // 1. Ground Collision Detection (y < 0.005 meters, i.e., 5mm, ignoring base_link and shoulder_link)
+    let groundCollide = false
+    const groundY = 0.005
+    for (const [linkName, box] of linkBoxesMap.entries()) {
+      const nameLower = linkName.toLowerCase()
+      if (nameLower.includes('base_link') || nameLower.includes('shoulder_link') || nameLower.includes('link1')) {
+        continue
       }
-      if (isColliding) break
+      if (box.min.y < groundY) {
+        groundCollide = true
+        break
+      }
     }
+
+    // 2. Self Collision Detection (ignoring adjacent links and close wrist couples to avoid false positives)
+    let selfCollide = false
+    const selfCollisionPairs = [
+      // shoulder_link (link1) vs others
+      { a: 'shoulder_link', b: 'forearm_link' },
+      { a: 'shoulder_link', b: 'wrist1_link' },
+      { a: 'shoulder_link', b: 'wrist2_link' },
+      { a: 'shoulder_link', b: 'wrist3_link' },
+      // upperarm_link (link2) vs others
+      { a: 'upperarm_link', b: 'wrist1_link' },
+      { a: 'upperarm_link', b: 'wrist2_link' },
+      { a: 'upperarm_link', b: 'wrist3_link' },
+      // forearm_link (link3) vs end-effector
+      { a: 'forearm_link', b: 'wrist3_link' }
+    ]
+
+    for (const pair of selfCollisionPairs) {
+      let boxA: THREE.Box3 | undefined
+      let boxB: THREE.Box3 | undefined
+
+      for (const [key, box] of linkBoxesMap.entries()) {
+        const keyLower = key.toLowerCase()
+        if (keyLower.includes(pair.a)) boxA = box
+        if (keyLower.includes(pair.b)) boxB = box
+      }
+
+      if (boxA && boxB && boxA.intersectsBox(boxB)) {
+        selfCollide = true
+        break
+      }
+    }
+
+    // 3. Object Collision Detection (with imported auxiliary 3D objects)
+    let objectCollide = false
+    if (loadedObjectsRef.current.size > 0) {
+      for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
+        const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
+        if (!storeObj || !storeObj.visible) continue
+
+        const objBox = new THREE.Box3().setFromObject(threeObj)
+
+        for (const linkBox of linkBoxesMap.values()) {
+          if (linkBox.intersectsBox(objBox)) {
+            objectCollide = true
+            break
+          }
+        }
+        if (objectCollide) break
+      }
+    }
+
+    const isColliding = groundCollide || selfCollide || objectCollide
 
     if (useSceneStore.getState().collisionWarning !== isColliding) {
       setCollisionWarning(isColliding)

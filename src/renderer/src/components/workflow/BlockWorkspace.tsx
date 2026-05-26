@@ -1,8 +1,19 @@
 import React, { useState } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { WorkflowStep, StepType } from '../../types/robot.types'
-import { Trash2, GripVertical, Plus, RotateCw, Move, Radio, Clock, ToggleLeft } from 'lucide-react'
+import { Trash2, GripVertical, Plus, RotateCw, Move, Radio, Clock, ToggleLeft, HelpCircle } from 'lucide-react'
 import { translations } from '../../i18n/translations'
+
+// Helper component for descriptive tooltips on technical terms
+const InfoTooltip = ({ text }: { text: string }) => (
+  <div className="relative group inline-block align-middle select-none shrink-0" onClick={e => e.stopPropagation()}>
+    <HelpCircle size={11} className="text-white/50 hover:text-white cursor-help transition" />
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-56 bg-[#121214]/95 border border-white/10 text-[10px] text-slate-300 p-2.5 rounded-lg shadow-2xl backdrop-blur-md z-[100] pointer-events-none font-normal leading-relaxed normal-case">
+      {text}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#121214]" />
+    </div>
+  </div>
+)
 
 interface BlockTemplate {
   type: StepType
@@ -330,16 +341,36 @@ export default function BlockWorkspace() {
                 {/* 2. Block Contents */}
                 <div className="flex-1 p-3 flex flex-wrap items-center gap-2">
                   {/* Block Type Label */}
-                  <span className="text-[10px] font-black uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded text-white/90 font-mono">
-                    {step.type === 'RotateJoint'
-                      ? 'Rotate'
-                      : step.type === 'MoveTCP'
-                      ? 'Move TCP'
-                      : step.type === 'SetDO'
-                      ? 'Set DO'
-                      : step.type === 'WaitMs'
-                      ? 'Delay'
-                      : 'Gripper'}
+                  <span className="text-[10px] font-black uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded text-white/90 font-mono flex items-center gap-1 select-none">
+                    {step.type === 'RotateJoint' && (
+                      <>
+                        Rotate
+                        <InfoTooltip text={t('tooltipFK')} />
+                      </>
+                    )}
+                    {step.type === 'MoveTCP' && (
+                      <>
+                        Move TCP
+                        <InfoTooltip text={t('tooltipMoveL')} />
+                      </>
+                    )}
+                    {step.type === 'SetDO' && (
+                      <>
+                        Set DO
+                        <InfoTooltip text={t('tooltipDO')} />
+                      </>
+                    )}
+                    {step.type === 'WaitMs' && (
+                      <>
+                        Delay
+                        <InfoTooltip text={t('tooltipDelay')} />
+                      </>
+                    )}
+                    {(step.type === 'GripperClose' || step.type === 'GripperOpen') && (
+                      <>
+                        Gripper
+                      </>
+                    )}
                   </span>
 
                   {/* Render parameters interface inside the block */}
@@ -471,18 +502,21 @@ export default function BlockWorkspace() {
                         ))}
                       </select>
                       <span>{language === 'vi' ? 'thành' : 'to'}</span>
-                      <select
-                        value={step.doValue ?? 1}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value) as 0 | 1
-                          updateStep(step.id, { doValue: val })
-                        }}
-                        disabled={isPlaying}
-                        className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white font-semibold outline-none cursor-pointer"
-                      >
-                        <option value={1}>{t('turnOn')}</option>
-                        <option value={0}>{t('turnOff')}</option>
-                      </select>
+                      <div className="flex items-center gap-1">
+                        <select
+                          value={step.doValue ?? 1}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) as 0 | 1
+                            updateStep(step.id, { doValue: val })
+                          }}
+                          disabled={isPlaying}
+                          className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white font-semibold outline-none cursor-pointer font-mono"
+                        >
+                          <option value={1}>{t('turnOn')}</option>
+                          <option value={0}>{t('turnOff')}</option>
+                        </select>
+                        <InfoTooltip text={t('tooltipDOVal')} />
+                      </div>
                     </div>
                   )}
 
