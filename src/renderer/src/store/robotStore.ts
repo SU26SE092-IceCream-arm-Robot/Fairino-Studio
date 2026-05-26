@@ -23,7 +23,7 @@ interface RobotState {
   currentStepIndex: number
   mode: 'normal' | 'advanced'
   language: 'vi' | 'en'
-  lengthUnit: 'mm' | 'm'
+  lengthUnit: 'mm' | 'cm' | 'm'
   angleUnit: 'deg' | 'rad'
   
   // Actions
@@ -34,7 +34,7 @@ interface RobotState {
   setCurrentFilePath: (path: string | null) => void
   setMode: (mode: 'normal' | 'advanced') => void
   setLanguage: (lang: 'vi' | 'en') => void
-  setLengthUnit: (unit: 'mm' | 'm') => void
+  setLengthUnit: (unit: 'mm' | 'cm' | 'm') => void
   setAngleUnit: (unit: 'deg' | 'rad') => void
   
   // Workflow actions

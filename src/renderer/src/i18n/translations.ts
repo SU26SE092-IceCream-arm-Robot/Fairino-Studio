@@ -30,6 +30,16 @@ export const translations = {
     payload: 'Tải trọng',
     reach: 'Tầm với',
     jointLimitTitle: 'Khớp',
+    scene: 'Scene',
+    resources: 'Tài nguyên',
+    environment: 'Environment',
+    models: 'Models',
+    robot: 'Robot',
+    floorGrid: 'Floor Grid',
+    light: 'Light',
+    tool: 'Tool',
+    search: 'Tìm kiếm',
+    robotControl: 'Robot Control',
     
     // ScenePanel
     upload3D: 'Tải lên Thiết bị 3D',
@@ -127,6 +137,16 @@ export const translations = {
     payload: 'Payload',
     reach: 'Reach',
     jointLimitTitle: 'Joint',
+    scene: 'Scene',
+    resources: 'Resources',
+    environment: 'Environment',
+    models: 'Models',
+    robot: 'Robot',
+    floorGrid: 'Floor Grid',
+    light: 'Light',
+    tool: 'Tool',
+    search: 'Search',
+    robotControl: 'Robot Control',
     
     // ScenePanel
     upload3D: 'Upload 3D Device',

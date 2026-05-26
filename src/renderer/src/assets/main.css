@@ -11,3 +11,27 @@ html, body, #root {
   background-image: none;
   background-color: var(--color-background);
 }
+
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #5f6068 #16161a;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: #16161a;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #5f6068;
+  border: 2px solid #16161a;
+  border-radius: 999px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #777983;
+}

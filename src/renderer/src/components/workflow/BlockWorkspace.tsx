@@ -22,6 +22,24 @@ interface BlockTemplate {
   icon: React.ReactNode
 }
 
+const displayDistance = (valueMm: number, unit: 'mm' | 'cm' | 'm') => {
+  if (unit === 'm') return Math.round((valueMm / 1000) * 10000) / 10000
+  if (unit === 'cm') return Math.round((valueMm / 10) * 100) / 100
+  return valueMm
+}
+
+const inputDistanceToMm = (value: number, unit: 'mm' | 'cm' | 'm') => {
+  if (unit === 'm') return Math.round(value * 1000 * 10) / 10
+  if (unit === 'cm') return Math.round(value * 10 * 10) / 10
+  return value
+}
+
+const distanceInputStep = (unit: 'mm' | 'cm' | 'm') => {
+  if (unit === 'm') return '0.0001'
+  if (unit === 'cm') return '0.01'
+  return '1'
+}
+
 export default function BlockWorkspace() {
   const steps = useRobotStore((state) => state.steps)
   const addStep = useRobotStore((state) => state.addStep)
@@ -464,19 +482,12 @@ export default function BlockWorkspace() {
 
                       <input
                         type="number"
-                        value={
-                          lengthUnit === 'm'
-                            ? Math.round(((step.distance ?? 0) / 1000) * 10000) / 10000
-                            : step.distance ?? 0
-                        }
+                        value={displayDistance(step.distance ?? 0, lengthUnit)}
                         onChange={(e) => {
                           const inputVal = parseFloat(e.target.value) || 0
-                          const mmVal = lengthUnit === 'm'
-                            ? Math.round(inputVal * 1000 * 10) / 10
-                            : inputVal
-                          updateStep(step.id, { distance: mmVal })
+                          updateStep(step.id, { distance: inputDistanceToMm(inputVal, lengthUnit) })
                         }}
-                        step={lengthUnit === 'm' ? '0.0001' : '1'}
+                        step={distanceInputStep(lengthUnit)}
                         disabled={isPlaying}
                         className="bg-black/40 border border-white/10 rounded px-1.5 py-0.5 w-16 text-center text-xs font-mono font-bold text-white outline-none"
                       />

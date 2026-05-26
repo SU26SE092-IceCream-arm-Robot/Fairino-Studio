@@ -731,6 +731,11 @@ export default function Viewport3D() {
       const selfTextEl = document.getElementById('self-measure-text')
 
       const unit = useRobotStore.getState().lengthUnit
+      const formatDistance = (distanceMm: number) => {
+        if (unit === 'm') return `${(distanceMm / 1000).toFixed(3)} m`
+        if (unit === 'cm') return `${(distanceMm / 10).toFixed(1)} cm`
+        return `${distanceMm} mm`
+      }
       const isDebug = useSceneStore.getState().isDebugHitbox
       const currentLanguage = useRobotStore.getState().language
 
@@ -901,7 +906,7 @@ export default function Viewport3D() {
             const cleanName = Object.keys(nameMap).find(k => closestLinkName.toLowerCase().includes(k))
               ? nameMap[Object.keys(nameMap).find(k => closestLinkName.toLowerCase().includes(k))!]
               : closestLinkName
-            const valStr = unit === 'm' ? `${(distanceMm / 1000).toFixed(3)} m` : `${distanceMm} mm`
+            const valStr = formatDistance(distanceMm)
             textEl.innerHTML = `${cleanName} ↔ ${targetObj.name}: ${valStr}`
           }
         }
@@ -965,7 +970,7 @@ export default function Viewport3D() {
             const cleanB = Object.keys(nameMap).find(k => selfLinkB.toLowerCase().includes(k))
               ? nameMap[Object.keys(nameMap).find(k => selfLinkB.toLowerCase().includes(k))!] : selfLinkB
 
-            const valStr = unit === 'm' ? `${(selfDistanceMm / 1000).toFixed(3)} m` : `${selfDistanceMm} mm`
+            const valStr = formatDistance(selfDistanceMm)
             selfTextEl.innerHTML = `${cleanA} ↔ ${cleanB}: ${valStr}`
           }
         } else {
