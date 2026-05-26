@@ -1,7 +1,9 @@
 import React, { useRef } from 'react'
 import { useSceneStore } from '../../store/sceneStore'
+import { useRobotStore } from '../../store/robotStore'
 import { Trash2, Eye, EyeOff, Upload, Settings } from 'lucide-react'
 import { Transform3D } from '../../types/scene.types'
+import { translations } from '../../i18n/translations'
 
 export default function ScenePanel() {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -13,6 +15,10 @@ export default function ScenePanel() {
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
   const setSelectedObjectId = useSceneStore((state) => state.setSelectedObjectId)
 
+  // Language translation helper
+  const language = useRobotStore((state) => state.language)
+  const t = (key: keyof typeof translations.vi) => translations[language][key]
+
   const selectedObject = objects.find((o) => o.id === selectedObjectId)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -23,13 +29,12 @@ export default function ScenePanel() {
     const extension = file.name.split('.').pop()?.toLowerCase()
     
     if (extension !== 'gltf' && extension !== 'glb' && extension !== 'stl') {
-      alert('Chỉ hỗ trợ import file .gltf, .glb hoặc .stl!')
+      alert(t('importFormatError'))
       return
     }
 
-    // Create Object URL for loading in Three.js
     const url = URL.createObjectURL(file)
-    const filePath = (file as any).path // Electron absolute path if available
+    const filePath = (file as any).path
 
     addObject({
       name: name || 'Unnamed Object',
@@ -38,7 +43,6 @@ export default function ScenePanel() {
       url
     })
 
-    // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -66,23 +70,23 @@ export default function ScenePanel() {
         />
         <button
           onClick={triggerFileInput}
-          className="w-full py-4 border border-dashed border-[#3a3a45] hover:border-blue-500 rounded-lg flex flex-col items-center justify-center gap-2 bg-[#121214] hover:bg-[#15151a] transition text-xs font-semibold text-slate-300 hover:text-white"
+          className="w-full py-4 border border-dashed border-[#3a3a45] hover:border-blue-500 rounded-lg flex flex-col items-center justify-center gap-2 bg-[#121214] hover:bg-[#15151a] transition text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
         >
           <Upload size={20} className="text-blue-500" />
-          Tải lên Thiết bị 3D
-          <span className="text-[10px] text-slate-500 font-normal">Hỗ trợ GLTF, GLB, STL</span>
+          {t('upload3D')}
+          <span className="text-[10px] text-slate-500 font-normal">{t('supportFormats')}</span>
         </button>
       </div>
 
       {/* Objects List */}
       <div className="p-4 flex-1 overflow-y-auto space-y-3 min-h-0">
         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
-          Danh sách thiết bị ({objects.length})
+          {t('deviceList')} ({objects.length})
         </span>
 
         {objects.length === 0 ? (
           <div className="text-center py-8 text-slate-500 text-xs">
-            Chưa có thiết bị phụ trợ nào được thêm vào.
+            {t('noDevices')}
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -110,13 +114,13 @@ export default function ScenePanel() {
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => updateObjectVisibility(obj.id, !obj.visible)}
-                      className="p-1 hover:bg-[#2d2d34] rounded text-slate-500 hover:text-slate-300"
+                      className="p-1 hover:bg-[#2d2d34] rounded text-slate-500 hover:text-slate-300 cursor-pointer"
                     >
                       {obj.visible ? <Eye size={12} /> : <EyeOff size={12} />}
                     </button>
                     <button
                       onClick={() => removeObject(obj.id)}
-                      className="p-1 hover:bg-rose-950/30 rounded text-slate-500 hover:text-rose-400"
+                      className="p-1 hover:bg-rose-950/30 rounded text-slate-500 hover:text-rose-400 cursor-pointer"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -130,10 +134,10 @@ export default function ScenePanel() {
 
       {/* Selected Object Transforms */}
       {selectedObject && (
-        <div className="p-4 border-t border-[#2d2d34] bg-[#141417] space-y-4 max-h-[400px] overflow-y-auto">
+        <div className="p-4 border-t border-[#2d2d34] bg-[#141417] space-y-4 max-h-[400px] overflow-y-auto shrink-0">
           <div className="flex justify-between items-center">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
-              Biến đổi (Transform)
+              {t('transform')}
             </span>
             <span className="text-[10px] text-blue-400 font-bold truncate max-w-[150px]">
               {selectedObject.name}
@@ -142,7 +146,7 @@ export default function ScenePanel() {
 
           {/* Position (x, y, z) */}
           <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">Vị trí (XYZ - mm)</span>
+            <span className="text-[11px] font-bold text-slate-400 block">{t('position')}</span>
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <span className="text-[9px] text-red-400 block font-mono">X (mm)</span>
@@ -150,7 +154,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.x}
                   onChange={(e) => handleTransformChange('x', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -159,7 +163,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.y}
                   onChange={(e) => handleTransformChange('y', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -168,7 +172,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.z}
                   onChange={(e) => handleTransformChange('z', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
             </div>
@@ -176,7 +180,7 @@ export default function ScenePanel() {
 
           {/* Rotation (rx, ry, rz) */}
           <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">Góc xoay (RxRyRz - độ)</span>
+            <span className="text-[11px] font-bold text-slate-400 block">{t('rotation')}</span>
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <span className="text-[9px] text-red-300 block font-mono">Rx (°)</span>
@@ -184,7 +188,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.rx}
                   onChange={(e) => handleTransformChange('rx', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -193,7 +197,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.ry}
                   onChange={(e) => handleTransformChange('ry', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -202,7 +206,7 @@ export default function ScenePanel() {
                   type="number"
                   value={selectedObject.transform.rz}
                   onChange={(e) => handleTransformChange('rz', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
             </div>
@@ -210,7 +214,7 @@ export default function ScenePanel() {
 
           {/* Scale (sx, sy, sz) */}
           <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">Tỉ lệ (Scale)</span>
+            <span className="text-[11px] font-bold text-slate-400 block">{t('scale')}</span>
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <span className="text-[9px] text-slate-500 block font-mono">Sx</span>
@@ -219,7 +223,7 @@ export default function ScenePanel() {
                   value={selectedObject.transform.sx}
                   step="0.1"
                   onChange={(e) => handleTransformChange('sx', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -229,7 +233,7 @@ export default function ScenePanel() {
                   value={selectedObject.transform.sy}
                   step="0.1"
                   onChange={(e) => handleTransformChange('sy', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
               <div>
@@ -239,7 +243,7 @@ export default function ScenePanel() {
                   value={selectedObject.transform.sz}
                   step="0.1"
                   onChange={(e) => handleTransformChange('sz', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center"
+                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
                 />
               </div>
             </div>

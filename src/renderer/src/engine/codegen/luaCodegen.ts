@@ -50,6 +50,24 @@ export function generateLua(steps: WorkflowStep[], projectName: string = 'Unname
         }
         break
 
+      case 'RotateJoint':
+        if (step.jointAngles) {
+          const [j1, j2, j3, j4, j5, j6] = step.jointAngles
+          lua += `MoveJ({${j1.toFixed(2)}, ${j2.toFixed(2)}, ${j3.toFixed(2)}, ${j4.toFixed(2)}, ${j5.toFixed(2)}, ${j6.toFixed(2)}}, 0, 0, ${step.speed.toFixed(1)}, ${step.acc.toFixed(1)}, -1.0, -1.0)\n`
+        } else {
+          lua += `-- Lỗi: Chưa giải được góc khớp cho RotateJoint\n`
+        }
+        break
+
+      case 'MoveTCP':
+        if (step.tcpPose) {
+          const { x, y, z, rx, ry, rz } = step.tcpPose
+          lua += `MoveL({${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}, ${rx.toFixed(2)}, ${ry.toFixed(2)}, ${rz.toFixed(2)}}, 0, 0, ${step.speed.toFixed(1)}, ${step.acc.toFixed(1)}, -1.0, -1.0)\n`
+        } else {
+          lua += `-- Lỗi: Chưa giải được tọa độ TCP cho MoveTCP\n`
+        }
+        break
+
       case 'SetDO':
         const doIdx = step.doIndex !== undefined ? step.doIndex : 1
         const doVal = step.doValue !== undefined ? step.doValue : 1

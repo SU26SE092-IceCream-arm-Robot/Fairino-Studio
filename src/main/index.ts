@@ -3,14 +3,15 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import fs from 'fs/promises'
+import { setupMenu } from './menu'
 
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1024, // Wider by default for better 3D simulation space
+    height: 768,
     show: false,
-    autoHideMenuBar: true,
+    autoHideMenuBar: false,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -26,6 +27,9 @@ function createWindow(): void {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  // Initialize the native application menu bar
+  setupMenu(mainWindow)
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.

@@ -8,7 +8,8 @@ import URDFLoader from 'urdf-loader'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { solveIK } from '../../engine/robot/ikSolver'
-import { ShieldAlert } from 'lucide-react'
+import { ShieldAlert, HelpCircle } from 'lucide-react'
+import { WorkflowStep } from '../../types/robot.types'
 
 export default function Viewport3D() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -22,6 +23,9 @@ export default function Viewport3D() {
   
   // Track loaded 3D models: map objectId -> THREE.Object3D
   const loadedObjectsRef = useRef<Map<string, THREE.Object3D>>(new Map())
+  
+  // Cache the last user config JSON to block infinite store update loop
+  const lastUserConfigRef = useRef<string>('')
 
   const jointAngles = useRobotStore((state) => state.jointAngles)
   const setJointAngles = useRobotStore((state) => state.setJointAngles)
@@ -29,11 +33,193 @@ export default function Viewport3D() {
   const isIKMode = useRobotStore((state) => state.isIKMode)
   const isPlaying = useRobotStore((state) => state.isPlaying)
   const selectedJointName = useRobotStore((state) => state.selectedJointName)
+  const steps = useRobotStore((state) => state.steps)
 
   const objects = useSceneStore((state) => state.objects)
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
   const collisionWarning = useSceneStore((state) => state.collisionWarning)
   const setCollisionWarning = useSceneStore((state) => state.setCollisionWarning)
+
+  // Helper to compute Forward Kinematics (FK)
+  const computeFK = (angles: number[], robot: any) => {
+    const jointNames = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+    const originalAngles = jointNames.map(name => robot.joints[name].rotation.z)
+    
+    jointNames.forEach((name, idx) => {
+      robot.joints[name].setJointValue(angles[idx] * Math.PI / 180)
+    })
+    robot.updateMatrixWorld(true)
+    
+    const baseLink = robot.links['base_link']
+    const wristLink = robot.links['wrist3_link']
+    const pos = new THREE.Vector3()
+    const q = new THREE.Quaternion()
+    
+    if (baseLink && wristLink) {
+      const baseMatInv = new THREE.Matrix4().copy(baseLink.matrixWorld).invert()
+      const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, wristLink.matrixWorld)
+      relativeMat.decompose(pos, q, new THREE.Vector3())
+    }
+    
+    jointNames.forEach((name, idx) => {
+      robot.joints[name].setJointValue(originalAngles[idx])
+    })
+    robot.updateMatrixWorld(true)
+    
+    const euler = new THREE.Euler().setFromQuaternion(q, 'XYZ')
+    return {
+      x: Math.round(pos.x * 1000 * 10) / 10,
+      y: Math.round(pos.y * 1000 * 10) / 10,
+      z: Math.round(pos.z * 1000 * 10) / 10,
+      rx: Math.round((euler.x * 180) / Math.PI * 10) / 10,
+      ry: Math.round((euler.y * 180) / Math.PI * 10) / 10,
+      rz: Math.round((euler.z * 180) / Math.PI * 10) / 10
+    }
+  }
+
+  // Helper to compute Inverse Kinematics (IK)
+  const computeIK = (tcp: any, currentAngles: number[], robot: any): number[] | null => {
+    const targetPos = new THREE.Vector3(tcp.x / 1000, tcp.y / 1000, tcp.z / 1000)
+    const euler = new THREE.Euler(
+      (tcp.rx * Math.PI) / 180,
+      (tcp.ry * Math.PI) / 180,
+      (tcp.rz * Math.PI) / 180,
+      'XYZ'
+    )
+    const targetQuat = new THREE.Quaternion().setFromEuler(euler)
+    return solveIK(targetPos, targetQuat, currentAngles as any, robot)
+  }
+
+  // Automatically calculate jointAngles and tcpPose for all steps in the store (State Accumulator)
+  useEffect(() => {
+    const robot = robotRef.current
+    if (!robot || isPlaying || steps.length === 0) return
+
+    // Extract the raw structural config values chosen by the user
+    const userConfig = steps.map(s => ({
+      type: s.type,
+      jointIndex: s.jointIndex,
+      rotateMode: s.rotateMode,
+      angle: s.angle,
+      tcpAxis: s.tcpAxis,
+      moveMode: s.moveMode,
+      distance: s.distance,
+      doIndex: s.doIndex,
+      doValue: s.doValue,
+      delayMs: s.delayMs,
+      speed: s.speed,
+      acc: s.acc,
+      ...(s.type === 'MoveJ' ? { jointAngles: s.jointAngles } : {}),
+      ...(s.type === 'MoveL' ? { tcpPose: s.tcpPose } : {})
+    }))
+    const userConfigStr = JSON.stringify(userConfig)
+
+    // CRITICAL PREVENT LOOP: If user configurations have not changed, block update recalculations!
+    if (lastUserConfigRef.current === userConfigStr) {
+      return
+    }
+    lastUserConfigRef.current = userConfigStr
+
+    let tempJoints = [0, -30, 90, 0, 60, 0] // standard start joints
+    let changesMade = false
+
+    const updatedSteps = steps.map((step) => {
+      let nextJoints = [...tempJoints]
+      let nextTCP = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+      let stepChanged = false
+      let updatedFields: Partial<WorkflowStep> = {}
+
+      if (step.type === 'MoveJ') {
+        if (step.jointAngles) {
+          nextJoints = [...step.jointAngles]
+          if (!step.tcpPose) {
+            nextTCP = computeFK(nextJoints, robot)
+            updatedFields.tcpPose = nextTCP
+            stepChanged = true
+          }
+        }
+      } else if (step.type === 'MoveL') {
+        if (step.tcpPose) {
+          nextTCP = { ...step.tcpPose }
+          const solved = computeIK(nextTCP, tempJoints, robot)
+          if (solved) {
+            nextJoints = solved
+            if (!step.jointAngles || step.jointAngles.some((val, i) => Math.abs(val - solved[i]) > 0.1)) {
+              updatedFields.jointAngles = solved as any
+              stepChanged = true
+            }
+          }
+        }
+      } else if (step.type === 'RotateJoint') {
+        const jIdx = (step.jointIndex || 1) - 1
+        const angleVal = step.angle || 0
+        if (step.rotateMode === 'absolute') {
+          nextJoints[jIdx] = angleVal
+        } else {
+          nextJoints[jIdx] = tempJoints[jIdx] + angleVal
+        }
+        
+        if (!step.jointAngles || step.jointAngles.some((val, i) => Math.abs(val - nextJoints[i]) > 0.1)) {
+          updatedFields.jointAngles = nextJoints as any
+          stepChanged = true
+        }
+
+        const fkTCP = computeFK(nextJoints, robot)
+        if (!step.tcpPose || Math.abs(step.tcpPose.x - fkTCP.x) > 0.5 || Math.abs(step.tcpPose.z - fkTCP.z) > 0.5) {
+          updatedFields.tcpPose = fkTCP
+          stepChanged = true
+        }
+      } else if (step.type === 'MoveTCP') {
+        const curTCP = computeFK(tempJoints, robot)
+        const axis = step.tcpAxis || 'Z'
+        const dist = step.distance || 0
+        
+        nextTCP = { ...curTCP }
+        const key = axis.toLowerCase() as 'x' | 'y' | 'z'
+        if (step.moveMode === 'absolute') {
+          nextTCP[key] = dist
+        } else {
+          nextTCP[key] = curTCP[key] + dist
+        }
+
+        const solved = computeIK(nextTCP, tempJoints, robot)
+        if (solved) {
+          nextJoints = solved
+          if (!step.jointAngles || step.jointAngles.some((val, i) => Math.abs(val - solved[i]) > 0.1)) {
+            updatedFields.jointAngles = solved as any
+            stepChanged = true
+          }
+          if (!step.tcpPose || Math.abs(step.tcpPose.x - nextTCP.x) > 0.5 || Math.abs(step.tcpPose.z - nextTCP.z) > 0.5) {
+            updatedFields.tcpPose = nextTCP
+            stepChanged = true
+          }
+        }
+      } else {
+        // Non-moving commands (DO / Wait / Gripper)
+        if (!step.jointAngles || step.jointAngles.some((val, i) => Math.abs(val - tempJoints[i]) > 0.1)) {
+          updatedFields.jointAngles = tempJoints as any
+          stepChanged = true
+        }
+        const fkTCP = computeFK(tempJoints, robot)
+        if (!step.tcpPose || Math.abs(step.tcpPose.x - fkTCP.x) > 0.5 || Math.abs(step.tcpPose.z - fkTCP.z) > 0.5) {
+          updatedFields.tcpPose = fkTCP
+          stepChanged = true
+        }
+      }
+
+      tempJoints = [...nextJoints]
+
+      if (stepChanged) {
+        changesMade = true
+        return { ...step, ...updatedFields }
+      }
+      return step
+    })
+
+    if (changesMade) {
+      useRobotStore.getState().reorderSteps(updatedSteps)
+    }
+  }, [steps, isRobotLoaded, isPlaying])
 
   // Initialize Scene, Camera, Renderer, Controls, Gizmos
   useEffect(() => {
@@ -97,20 +283,17 @@ export default function Viewport3D() {
 
     // Create dummy target for IK Gizmo
     const dummyTarget = new THREE.Object3D()
-    
-    // Add a visual indicator (a small glowing cyan sphere) so the user knows where to grab
     const indicatorGeom = new THREE.SphereGeometry(0.025, 16, 16)
     const indicatorMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffcc, // Cyan color
+      color: 0x00ffcc,
       transparent: true,
       opacity: 0.7,
-      depthTest: false, // render on top of other meshes
+      depthTest: false
     })
     const indicatorMesh = new THREE.Mesh(indicatorGeom, indicatorMat)
     indicatorMesh.name = 'ik_target_indicator'
     dummyTarget.add(indicatorMesh)
 
-    // Add a wireframe cage around it for a techy robotic feel
     const cageGeom = new THREE.SphereGeometry(0.035, 8, 8)
     const cageMat = new THREE.MeshBasicMaterial({
       color: 0x00ffcc,
@@ -122,11 +305,11 @@ export default function Viewport3D() {
     const cageMesh = new THREE.Mesh(cageGeom, cageMat)
     dummyTarget.add(cageMesh)
 
-    dummyTarget.visible = false // hidden by default
+    dummyTarget.visible = false
     scene.add(dummyTarget)
     dummyTargetRef.current = dummyTarget
 
-    // Transform Controls (IK Gizmo)
+    // Transform Controls (IK, FK and Objects Gizmo)
     const transformControls = new TransformControls(camera, renderer.domElement)
     transformControls.size = 0.8
     transformControls.space = 'local'
@@ -138,39 +321,61 @@ export default function Viewport3D() {
       controls.enabled = !event.value
     })
 
-    // Listen to changes on Gizmo dragging (IK or Joint Rotation)
+    // Listen to changes on Gizmo dragging
     transformControls.addEventListener('objectChange', () => {
-      const activeIK = useRobotStore.getState().isIKMode
       const playing = useRobotStore.getState().isPlaying
       if (playing) return
 
       const robot = robotRef.current
       if (!robot) return
 
-      if (activeIK) {
+      const activeObject = transformControls.object
+      if (!activeObject) return
+
+      // A. Check if currently manipulating an imported auxiliary 3D object
+      const selectedObjId = useSceneStore.getState().selectedObjectId
+      if (selectedObjId) {
+        const threeObj = loadedObjectsRef.current.get(selectedObjId)
+        if (threeObj && activeObject === threeObj) {
+          const x = Math.round(threeObj.position.x * 1000)
+          const y = Math.round(threeObj.position.y * 1000)
+          const z = Math.round(threeObj.position.z * 1000)
+          
+          const rx = Math.round((threeObj.rotation.x * 180) / Math.PI)
+          const ry = Math.round((threeObj.rotation.y * 180) / Math.PI)
+          const rz = Math.round((threeObj.rotation.z * 180) / Math.PI)
+          
+          const sx = Math.round(threeObj.scale.x * 10) / 10
+          const sy = Math.round(threeObj.scale.y * 10) / 10
+          const sz = Math.round(threeObj.scale.z * 10) / 10
+
+          useSceneStore.getState().updateObjectTransform(selectedObjId, { x, y, z, rx, ry, rz, sx, sy, sz })
+          return
+        }
+      }
+
+      // B. Check if currently manipulating robot IK dummy target
+      if (dummyTargetRef.current && activeObject === dummyTargetRef.current) {
         const dummy = dummyTargetRef.current
         const wristLink = robot.links['wrist3_link']
         const baseLink = robot.links['base_link']
-        if (dummy && wristLink && baseLink) {
-          dummy.updateMatrixWorld(true) // Ensure matrix is up to date!
+        if (wristLink && baseLink) {
+          dummy.updateMatrixWorld(true)
 
           const baseMatInv = new THREE.Matrix4().copy(baseLink.matrixWorld).invert()
-          const targetWorldMat = dummy.matrixWorld
-          const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, targetWorldMat)
+          const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, dummy.matrixWorld)
 
           const targetPos = new THREE.Vector3()
           const targetQuat = new THREE.Quaternion()
           const scale = new THREE.Vector3()
           relativeMat.decompose(targetPos, targetQuat, scale)
 
-          // Clamp virtual target point locally instead of modifying dummy.position directly
-          // which confuses the TransformControls dragging logic.
           const wristWorldPos = new THREE.Vector3()
           wristLink.getWorldPosition(wristWorldPos)
           const wristLocalPos = wristWorldPos.applyMatrix4(baseMatInv)
           
           const dist = targetPos.distanceTo(wristLocalPos)
-          const maxDistance = 0.08 // 8cm max local offset allowed
+          const maxDistance = 0.08 // 8cm
           const clampedTargetPos = targetPos.clone()
           if (dist > maxDistance) {
             const dir = new THREE.Vector3().subVectors(targetPos, wristLocalPos).normalize()
@@ -178,47 +383,65 @@ export default function Viewport3D() {
           }
 
           const currentAngles = useRobotStore.getState().jointAngles
-          const newAngles = solveIK(clampedTargetPos, targetQuat, currentAngles, robot)
+          const newAngles = solveIK(clampedTargetPos, targetQuat, currentAngles as any, robot)
           
           if (newAngles) {
             setJointAngles(newAngles)
           }
         }
-      } else {
-        // FK Rotate Mode: Rotate selected joint directly using gizmo
-        const selectedJoint = useRobotStore.getState().selectedJointName
-        if (selectedJoint) {
-          const jointObj = robot.joints[selectedJoint]
-          if (jointObj) {
-            // Read local Z rotation (in radians) which is manipulated by TransformControls
-            let rad = jointObj.rotation.z
-            const jointIdx = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'].indexOf(selectedJoint)
-            if (jointIdx !== -1) {
-              const JOINT_LIMITS = [
-                { min: -175, max: 175 },
-                { min: -265, max: 85 },
-                { min: -162, max: 162 },
-                { min: -265, max: 85 },
-                { min: -175, max: 175 },
-                { min: -175, max: 175 }
-              ]
-              const limit = JOINT_LIMITS[jointIdx]
-              let deg = (rad * 180) / Math.PI
+        return
+      }
 
-              // Normalize angles
-              if (deg > 180) deg -= 360
-              if (deg < -180) deg += 360
+      // C. Check if currently manipulating a robot joint directly (FK)
+      const selectedJoint = useRobotStore.getState().selectedJointName
+      if (selectedJoint) {
+        const jointObj = robot.joints[selectedJoint]
+        if (jointObj && activeObject === jointObj) {
+          let rad = jointObj.rotation.z
+          const jointIdx = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'].indexOf(selectedJoint)
+          if (jointIdx !== -1) {
+            const JOINT_LIMITS = [
+              { min: -175, max: 175 },
+              { min: -265, max: 85 },
+              { min: -162, max: 162 },
+              { min: -265, max: 85 },
+              { min: -175, max: 175 },
+              { min: -175, max: 175 }
+            ]
+            const limit = JOINT_LIMITS[jointIdx]
+            let deg = (rad * 180) / Math.PI
 
-              const clampedDeg = Math.max(limit.min, Math.min(limit.max, deg))
-              
-              const currentAngles = [...useRobotStore.getState().jointAngles]
-              currentAngles[jointIdx] = Math.round(clampedDeg * 10) / 10
-              setJointAngles(currentAngles as any)
-            }
+            if (deg > 180) deg -= 360
+            if (deg < -180) deg += 360
+
+            const clampedDeg = Math.max(limit.min, Math.min(limit.max, deg))
+            
+            const currentAngles = [...useRobotStore.getState().jointAngles]
+            currentAngles[jointIdx] = Math.round(clampedDeg * 10) / 10
+            setJointAngles(currentAngles as any)
           }
         }
       }
     })
+
+    // Keyboard shortcuts listener for switching Transform Gizmo modes (W: translate, E: rotate, R: scale)
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const selectedObjId = useSceneStore.getState().selectedObjectId
+      if (!selectedObjId || !transformControls) return
+
+      switch (event.key.toLowerCase()) {
+        case 'w':
+          transformControls.setMode('translate')
+          break
+        case 'e':
+          transformControls.setMode('rotate')
+          break
+        case 'r':
+          transformControls.setMode('scale')
+          break
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
 
     // Load URDF Robot
     const loader = new URDFLoader()
@@ -229,7 +452,7 @@ export default function Viewport3D() {
     loader.load(
       './fairino_description/urdf/fairino5_v6.urdf',
       (robot) => {
-        robot.rotation.x = -Math.PI / 2 // Orient UP in Three.js
+        robot.rotation.x = -Math.PI / 2
         robot.position.y = 0
         
         robot.traverse((child: any) => {
@@ -255,12 +478,11 @@ export default function Viewport3D() {
       }
     )
 
-    // Click to select robot joints (Raycasting)
+    // Click to select joints or imported 3D objects (Raycasting)
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
 
     const onPointerDown = (event: PointerEvent) => {
-      // Only handle left clicks, and ignore if clicking on transformControls gizmo or during simulation
       if (
         event.button !== 0 ||
         transformControls.dragging ||
@@ -275,7 +497,34 @@ export default function Viewport3D() {
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
       raycaster.setFromCamera(mouse, camera)
+
+      // 1. Raycast imported auxiliary objects first
+      const loadedMeshes = Array.from(loadedObjectsRef.current.values())
+      const objectIntersects = raycaster.intersectObjects(loadedMeshes, true)
       
+      if (objectIntersects.length > 0) {
+        let hitObject: THREE.Object3D | null = objectIntersects[0].object
+        let matchedId: string | null = null
+        
+        while (hitObject && hitObject !== scene) {
+          for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
+            if (threeObj === hitObject) {
+              matchedId = id
+              break
+            }
+          }
+          if (matchedId) break
+          hitObject = hitObject.parent
+        }
+
+        if (matchedId) {
+          useSceneStore.getState().setSelectedObjectId(matchedId)
+          useRobotStore.getState().setSelectedJointName(null)
+          return
+        }
+      }
+
+      // 2. Raycast robot links
       const robot = robotRef.current
       if (robot) {
         const intersects = raycaster.intersectObject(robot, true)
@@ -298,13 +547,15 @@ export default function Viewport3D() {
 
           if (jointName) {
             useRobotStore.getState().setSelectedJointName(jointName)
+            useSceneStore.getState().setSelectedObjectId(null) // clear selected object
             return
           }
         }
       }
       
-      // Click outside robot clears selection
+      // Click empty space clears selection
       useRobotStore.getState().setSelectedJointName(null)
+      useSceneStore.getState().setSelectedObjectId(null)
     }
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
@@ -315,6 +566,11 @@ export default function Viewport3D() {
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
       
+      // Update outline helper for selected objects
+      if (boxHelperRef.current && boxHelperRef.current.visible) {
+        boxHelperRef.current.update()
+      }
+
       // Perform collision detection
       checkCollisions()
 
@@ -337,6 +593,7 @@ export default function Viewport3D() {
     return () => {
       cancelAnimationFrame(animationFrameId)
       window.removeEventListener('resize', handleResize)
+      window.removeEventListener('keydown', handleKeyDown)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.dispose()
       transformControls.dispose()
@@ -359,7 +616,6 @@ export default function Viewport3D() {
     let isColliding = false
     const robotBoxes: THREE.Box3[] = []
 
-    // 1. Gather bounding boxes for each link mesh of the robot
     robot.traverse((child: any) => {
       if (child.isMesh && child.name && child.name.includes('link') && !child.name.includes('base_link')) {
         child.geometry.computeBoundingBox()
@@ -370,15 +626,12 @@ export default function Viewport3D() {
       }
     })
 
-    // 2. Check collision against all visible imported objects
     for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
       const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
       if (!storeObj || !storeObj.visible) continue
 
-      // Compute world bounding box of imported object
       const objBox = new THREE.Box3().setFromObject(threeObj)
 
-      // Test intersection
       for (const rBox of robotBoxes) {
         if (rBox.intersectsBox(objBox)) {
           isColliding = true
@@ -421,11 +674,9 @@ export default function Viewport3D() {
             scene.add(mesh)
             loadedMap.set(obj.id, mesh)
             
-            // Trigger selection update to refresh boxhelper
             updateSelection()
           })
         } else {
-          // GLTF/GLB
           const gltfLoader = new GLTFLoader()
           gltfLoader.load(obj.url, (gltf) => {
             const model = gltf.scene
@@ -449,7 +700,12 @@ export default function Viewport3D() {
         // 2. Update existing object transform & visibility
         const threeObj = loadedMap.get(obj.id)
         if (threeObj) {
-          updateThreeObjTransform(threeObj, obj.transform)
+          const transformControls = transformControlsRef.current
+          const isDraggingThis = transformControls && transformControls.dragging && transformControls.object === threeObj
+          
+          if (!isDraggingThis) {
+            updateThreeObjTransform(threeObj, obj.transform)
+          }
           threeObj.visible = obj.visible
         }
       }
@@ -490,7 +746,7 @@ export default function Viewport3D() {
     updateSelection()
   }, [selectedObjectId, objects])
 
-  // Sync transform helper values
+  // Sync transform helper values (mm/degrees to meters/radians)
   const updateThreeObjTransform = (threeObj: THREE.Object3D, t: any) => {
     threeObj.position.set(t.x / 1000, t.y / 1000, t.z / 1000)
     threeObj.rotation.set(
@@ -501,7 +757,7 @@ export default function Viewport3D() {
     threeObj.scale.set(t.sx, t.sy, t.sz)
   }
 
-  // Highlight joint links: Red if at mechanical limit, Blue if selected, Reset if normal
+  // Highlight joint links
   const highlightJointLink = (selectedJoint: string | null) => {
     const robot = robotRef.current
     if (!robot) return
@@ -541,19 +797,15 @@ export default function Viewport3D() {
           const limit = JOINT_LIMITS[jointIdx]
           const angleVal = currentAngles[jointIdx]
 
-          // Check if at limit (tolerance 0.5 degrees)
           const isAtLimit = Math.abs(angleVal - limit.min) <= 0.5 || Math.abs(angleVal - limit.max) <= 0.5
 
           if (isAtLimit) {
-            // Red glowing alert for joint limit
             child.material.emissive = new THREE.Color(0xf43f5e)
             child.material.emissiveIntensity = 0.8
           } else if (matchedJoint === selectedJoint) {
-            // Blue glowing for selected joint
             child.material.emissive = new THREE.Color(0x0284c7)
             child.material.emissiveIntensity = 0.5
           } else {
-            // Reset normal material
             child.material.emissive = new THREE.Color(0x000000)
             child.material.emissiveIntensity = 0
           }
@@ -570,7 +822,6 @@ export default function Viewport3D() {
 
     if (!transformControls || !dummyTarget) return
 
-    // If robot is not loaded yet or simulation is currently playing, hide and detach Gizmo immediately
     if (!robot || isPlaying) {
       transformControls.detach()
       transformControls.getHelper().visible = false
@@ -580,56 +831,79 @@ export default function Viewport3D() {
     }
 
     if (isIKMode) {
-      highlightJointLink(null) // clear highlights in IK mode
+      highlightJointLink(null)
       
-      const wristLink = robot.links['wrist3_link']
-      if (wristLink) {
-        const wristWorldPos = new THREE.Vector3()
-        const wristWorldQuat = new THREE.Quaternion()
-        wristLink.getWorldPosition(wristWorldPos)
-        wristLink.getWorldQuaternion(wristWorldQuat)
+      // Only copy the wristLink position to the dummyTarget if we are not actively dragging it
+      if (!transformControls.dragging) {
+        const wristLink = robot.links['wrist3_link']
+        if (wristLink) {
+          const wristWorldPos = new THREE.Vector3()
+          const wristWorldQuat = new THREE.Quaternion()
+          wristLink.getWorldPosition(wristWorldPos)
+          wristLink.getWorldQuaternion(wristWorldQuat)
 
-        dummyTarget.position.copy(wristWorldPos)
-        dummyTarget.quaternion.copy(wristWorldQuat)
-        dummyTarget.updateMatrixWorld(true)
+          dummyTarget.position.copy(wristWorldPos)
+          dummyTarget.quaternion.copy(wristWorldQuat)
+          dummyTarget.updateMatrixWorld(true)
+        }
       }
       
-      // IK mode translation (translate)
       transformControls.setMode('translate')
       transformControls.showX = true
       transformControls.showY = true
       transformControls.showZ = true
       
-      transformControls.attach(dummyTarget)
+      // Only attach if it's not already attached to prevent resetting the dragging state offset
+      if (transformControls.object !== dummyTarget) {
+        transformControls.attach(dummyTarget)
+      }
       transformControls.getHelper().visible = true
       dummyTarget.visible = true
-    } else {
-      dummyTarget.visible = false // hide cyan sphere target
+    } else if (selectedJointName) {
+      dummyTarget.visible = false
+      highlightJointLink(selectedJointName)
       
-      if (selectedJointName) {
-        highlightJointLink(selectedJointName)
+      const jointObj = robot.joints[selectedJointName]
+      if (jointObj) {
+        transformControls.setMode('rotate')
+        transformControls.showX = false
+        transformControls.showY = false
+        transformControls.showZ = true
         
-        const jointObj = robot.joints[selectedJointName]
-        if (jointObj) {
-          // Rotate mode for FK joint (Local Z axis rotation only)
-          transformControls.setMode('rotate')
-          transformControls.showX = false
-          transformControls.showY = false
-          transformControls.showZ = true
-          
+        // Only attach if it's not already attached to prevent resetting the dragging state offset
+        if (transformControls.object !== jointObj) {
           transformControls.attach(jointObj)
-          transformControls.getHelper().visible = true
-        } else {
-          transformControls.detach()
-          transformControls.getHelper().visible = false
         }
+        transformControls.getHelper().visible = true
       } else {
-        highlightJointLink(null)
         transformControls.detach()
         transformControls.getHelper().visible = false
       }
+    } else if (selectedObjectId) {
+      dummyTarget.visible = false
+      highlightJointLink(null)
+
+      const threeObj = loadedObjectsRef.current.get(selectedObjectId)
+      if (threeObj) {
+        transformControls.showX = true
+        transformControls.showY = true
+        transformControls.showZ = true
+        
+        // Only attach if it's not already attached to prevent resetting the dragging state offset
+        if (transformControls.object !== threeObj) {
+          transformControls.attach(threeObj)
+        }
+        transformControls.getHelper().visible = true
+      } else {
+        transformControls.detach()
+        transformControls.getHelper().visible = false
+      }
+    } else {
+      highlightJointLink(null)
+      transformControls.detach()
+      transformControls.getHelper().visible = false
     }
-  }, [isIKMode, isRobotLoaded, isPlaying, selectedJointName, jointAngles])
+  }, [isIKMode, isRobotLoaded, isPlaying, selectedJointName, selectedObjectId])
 
   // Update robot joints when jointAngles state changes
   useEffect(() => {
@@ -654,7 +928,6 @@ export default function Viewport3D() {
 
     robot.updateMatrixWorld(true)
 
-    // Compute TCP Pose (wrist3_link) relative to base_link
     const baseLink = robot.links['base_link']
     const wristLink = robot.links['wrist3_link']
 
@@ -667,12 +940,10 @@ export default function Viewport3D() {
       const scale = new THREE.Vector3()
       relativeMat.decompose(pos, q, scale)
 
-      // Convert pos to mm, prevent NaN
       const x = isNaN(pos.x) ? 0 : Math.round(pos.x * 1000 * 10) / 10
       const y = isNaN(pos.y) ? 0 : Math.round(pos.y * 1000 * 10) / 10
       const z = isNaN(pos.z) ? 0 : Math.round(pos.z * 1000 * 10) / 10
 
-      // Convert quaternion to Euler angles, prevent NaN
       const euler = new THREE.Euler().setFromQuaternion(q, 'XYZ')
       const rx = isNaN(euler.x) ? 0 : Math.round((euler.x * 180) / Math.PI * 10) / 10
       const ry = isNaN(euler.y) ? 0 : Math.round((euler.y * 180) / Math.PI * 10) / 10
@@ -680,7 +951,6 @@ export default function Viewport3D() {
 
       setTCPPose({ x, y, z, rx, ry, rz })
 
-      // Snap dummy target to actual reached pose to avoid drifting
       if (dummyTarget && !transformControlsRef.current?.dragging) {
         const wristWorldPos = new THREE.Vector3()
         const wristWorldQuat = new THREE.Quaternion()
@@ -701,6 +971,19 @@ export default function Viewport3D() {
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-rose-600/95 text-white px-4 py-2.5 rounded-lg shadow-lg border border-rose-500 animate-pulse">
           <ShieldAlert size={18} />
           <span className="text-xs font-bold uppercase tracking-wider">Cảnh báo: Phát hiện va chạm!</span>
+        </div>
+      )}
+
+      {/* Helper floating shortcuts hint (only shown when an object is selected) */}
+      {selectedObjectId && (
+        <div className="absolute top-4 right-4 z-10 bg-[#1e1e24]/90 border border-blue-500/30 text-slate-300 px-3.5 py-2.5 rounded-lg shadow-xl backdrop-blur-sm max-w-[240px] pointer-events-none flex items-start gap-2">
+          <HelpCircle size={14} className="text-blue-400 shrink-0 mt-0.5" />
+          <div className="text-[10px] space-y-1">
+            <span className="font-bold text-white block">Phím tắt di chuyển vật thể:</span>
+            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">W</kbd> - Dịch chuyển (Translate)</div>
+            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">E</kbd> - Xoay (Rotate)</div>
+            <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">R</kbd> - Co giãn (Scale)</div>
+          </div>
         </div>
       )}
 

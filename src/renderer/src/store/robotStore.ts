@@ -21,6 +21,10 @@ interface RobotState {
   selectedJointName: string | null
   playbackSpeed: number // multiplier (1 = 1x, 2 = 2x, etc.)
   currentStepIndex: number
+  mode: 'normal' | 'advanced'
+  language: 'vi' | 'en'
+  lengthUnit: 'mm' | 'm'
+  angleUnit: 'deg' | 'rad'
   
   // Actions
   setJointAngles: (angles: JointAngles) => void
@@ -28,6 +32,10 @@ interface RobotState {
   setIKMode: (enabled: boolean) => void
   setProjectName: (name: string) => void
   setCurrentFilePath: (path: string | null) => void
+  setMode: (mode: 'normal' | 'advanced') => void
+  setLanguage: (lang: 'vi' | 'en') => void
+  setLengthUnit: (unit: 'mm' | 'm') => void
+  setAngleUnit: (unit: 'deg' | 'rad') => void
   
   // Workflow actions
   addStep: (step: Omit<WorkflowStep, 'id'>) => void
@@ -60,12 +68,20 @@ export const useRobotStore = create<RobotState>((set) => ({
   playbackSpeed: 1,
   currentStepIndex: 0,
   selectedJointName: null,
+  mode: 'normal',
+  language: 'vi',
+  lengthUnit: 'mm',
+  angleUnit: 'deg',
   
   setJointAngles: (angles) => set({ jointAngles: angles }),
   setTCPPose: (pose) => set({ tcpPose: pose }),
   setIKMode: (enabled) => set({ isIKMode: enabled }),
   setProjectName: (name) => set({ projectName: name }),
   setCurrentFilePath: (path) => set({ currentFilePath: path }),
+  setMode: (mode) => set({ mode }),
+  setLanguage: (lang) => set({ language: lang }),
+  setLengthUnit: (unit) => set({ lengthUnit: unit }),
+  setAngleUnit: (unit) => set({ angleUnit: unit }),
   
   addStep: (step) =>
     set((state) => {

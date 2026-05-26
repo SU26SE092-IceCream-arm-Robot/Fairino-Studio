@@ -18,6 +18,8 @@ export type StepType =
   | 'GripperClose'
   | 'SetDO'
   | 'WaitMs'
+  | 'RotateJoint'
+  | 'MoveTCP'
   | 'Comment';
 
 export interface WorkflowStep {
@@ -34,6 +36,13 @@ export interface WorkflowStep {
   doValue?: 0 | 1;
   // Delay parameters
   delayMs?: number;
+  // Low-code Scratch parameters
+  jointIndex?: number;              // 1-6
+  rotateMode?: 'absolute' | 'relative';
+  angle?: number;                   // degrees
+  tcpAxis?: 'X' | 'Y' | 'Z';
+  moveMode?: 'absolute' | 'relative';
+  distance?: number;                // mm
   // Metadata
   comment?: string;
 }
