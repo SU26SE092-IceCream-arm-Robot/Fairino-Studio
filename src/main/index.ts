@@ -1,13 +1,23 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { tmpdir } from 'os'
 import icon from '../../resources/icon.png?asset'
 import fs from 'fs/promises'
 import { setupMenu } from './menu'
 
+const cacheDir = join(tmpdir(), 'fairobot-studio-electron-cache')
+app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+app.commandLine.appendSwitch('disable-gpu-program-cache')
+app.commandLine.appendSwitch('disk-cache-size', '0')
+app.commandLine.appendSwitch('media-cache-size', '0')
+
+let mainWindow: BrowserWindow | null = null
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
 function createWindow(): void {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1024, // Wider by default for better 3D simulation space
     height: 768,
     show: false,
@@ -20,7 +30,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    mainWindow?.show()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -33,25 +43,42 @@ function createWindow(): void {
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+if (gotSingleInstanceLock) app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  app.setAppUserModelId('com.electron')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'F12' && input.type === 'keyDown') {
+        window.webContents.toggleDevTools()
+      }
+      if (app.isPackaged && input.control && input.key.toLowerCase() === 'r') {
+        event.preventDefault()
+      }
+    })
   })
 
   // IPC test
@@ -79,6 +106,29 @@ app.whenReady().then(() => {
     try {
       const content = await fs.readFile(filePath, 'utf-8')
       return { success: true, content }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('read-block-library', async () => {
+    try {
+      const libraryPath = join(app.getPath('userData'), 'block-library.json')
+      const content = await fs.readFile(libraryPath, 'utf-8')
+      return { success: true, content }
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return { success: true, content: JSON.stringify({ modules: [], workflows: [] }) }
+      }
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('write-block-library', async (_, content) => {
+    try {
+      const libraryPath = join(app.getPath('userData'), 'block-library.json')
+      await fs.writeFile(libraryPath, content, 'utf-8')
+      return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

@@ -17,6 +17,10 @@ export default function Header() {
   const setCurrentFilePath = useRobotStore((state) => state.setCurrentFilePath)
   const setJointAngles = useRobotStore((state) => state.setJointAngles)
   const reorderSteps = useRobotStore((state) => state.reorderSteps)
+  const setSimpleBlocklyWorkspace = useRobotStore((state) => state.setSimpleBlocklyWorkspace)
+  const setProjectModules = useRobotStore((state) => state.setProjectModules)
+  const setProjectWorkflowTemplates = useRobotStore((state) => state.setProjectWorkflowTemplates)
+  const markSimpleWorkspaceClean = useRobotStore((state) => state.markSimpleWorkspaceClean)
 
   // Language translation helper
   const language = useRobotStore((state) => state.language)
@@ -29,6 +33,10 @@ export default function Header() {
       setJointAngles([0, 0, 0, 0, 0, 0])
       setProjectName('coffee_machine_workflow')
       setCurrentFilePath(null)
+      setSimpleBlocklyWorkspace(null)
+      setProjectModules([])
+      setProjectWorkflowTemplates([])
+      markSimpleWorkspaceClean()
       useSceneStore.getState().clearScene()
     }
   }
@@ -39,11 +47,14 @@ export default function Header() {
     const sceneState = useSceneStore.getState()
 
     const projectData = {
-      version: '1.0',
+      version: '1.1',
       projectName: robotState.projectName,
       robotModel: robotState.robotModel,
       jointAngles: robotState.jointAngles,
       steps: robotState.steps,
+      simpleBlocklyWorkspace: robotState.simpleBlocklyWorkspace,
+      projectModules: robotState.projectModules,
+      projectWorkflowTemplates: robotState.projectWorkflowTemplates,
       sceneObjects: sceneState.objects.map(obj => ({
         name: obj.name,
         fileType: obj.fileType,
@@ -60,7 +71,7 @@ export default function Header() {
   const deserializeProject = (jsonStr: string, filePath: string) => {
     try {
       const data = JSON.parse(jsonStr)
-      if (data.version !== '1.0') {
+      if (data.version !== '1.0' && data.version !== '1.1') {
         alert(t('projectCompatError'))
         return
       }
@@ -70,6 +81,12 @@ export default function Header() {
       setCurrentFilePath(filePath)
       setJointAngles(data.jointAngles || [0, 0, 0, 0, 0, 0])
       reorderSteps(data.steps || [])
+      setSimpleBlocklyWorkspace(data.simpleBlocklyWorkspace || null)
+      setProjectModules(Array.isArray(data.projectModules) ? data.projectModules : [])
+      setProjectWorkflowTemplates(Array.isArray(data.projectWorkflowTemplates) ? data.projectWorkflowTemplates : [])
+      if (data.simpleBlocklyWorkspace) {
+        markSimpleWorkspaceClean()
+      }
 
       // 2. Populate Scene Store
       useSceneStore.getState().clearScene()

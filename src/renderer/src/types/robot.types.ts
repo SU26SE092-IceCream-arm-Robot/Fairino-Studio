@@ -46,6 +46,33 @@ export interface WorkflowStep {
   distance?: number;                // mm
   // Metadata
   comment?: string;
+  simpleBlockId?: string;
+  simpleBlockRole?: 'moveA' | 'moveB';
+}
+
+export type SimpleLibraryScope = 'project' | 'app' | 'builtin';
+
+export interface SimpleModuleTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  blocksJson: unknown;
+  previewSteps: WorkflowStep[];
+  scope: SimpleLibraryScope;
+}
+
+export interface SimpleWorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  workspaceJson: unknown;
+  previewSteps: WorkflowStep[];
+  scope: SimpleLibraryScope;
+}
+
+export interface SimpleBlockLibrary {
+  modules: SimpleModuleTemplate[];
+  workflows: SimpleWorkflowTemplate[];
 }
 
 export interface RobotModelConfig {

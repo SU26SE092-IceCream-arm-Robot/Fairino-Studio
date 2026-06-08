@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -11,6 +11,13 @@ import { useSceneStore } from '../../store/sceneStore'
 import { solveIK } from '../../engine/robot/ikSolver'
 import { ShieldAlert, HelpCircle } from 'lucide-react'
 import { WorkflowStep } from '../../types/robot.types'
+
+interface SimpleWaypointScreenLabel {
+  id: string
+  label: string
+  color: 'cyan' | 'violet'
+  position: THREE.Vector3
+}
 
 const SELF_COLLISION_PAIRS = [
   { a: 'shoulder_link', b: 'forearm_link' },
@@ -34,8 +41,16 @@ export default function Viewport3D() {
   const measureLineRef = useRef<THREE.Line | null>(null)
   const selfMeasureLineRef = useRef<THREE.Line | null>(null)
   const hitboxHelpersRef = useRef<THREE.LineSegments[]>([])
+  const simplePathGroupRef = useRef<THREE.Group | null>(null)
   const keysPressedRef = useRef<Set<string>>(new Set())
+  const simpleWaypointLabelsRef = useRef<SimpleWaypointScreenLabel[]>([])
   const [isRobotLoaded, setIsRobotLoaded] = useState(false)
+  const [simpleWaypointLabels, setSimpleWaypointLabels] = useState<SimpleWaypointScreenLabel[]>([])
+  const [pointContextMenu, setPointContextMenu] = useState<{
+    x: number
+    y: number
+    pose: { x: number; y: number; z: number; rx: number; ry: number; rz: number }
+  } | null>(null)
   
   // Track loaded 3D models: map objectId -> THREE.Object3D
   const loadedObjectsRef = useRef<Map<string, THREE.Object3D>>(new Map())
@@ -201,6 +216,115 @@ export default function Viewport3D() {
     return new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, depthTest: false }))
   }
 
+  const poseToVector = (pose: { x: number; y: number; z: number }) => {
+    const localPoint = new THREE.Vector3(pose.x / 1000, pose.y / 1000, pose.z / 1000)
+    const baseLink = robotRef.current?.links?.['base_link']
+    if (!baseLink) return localPoint
+    return localPoint.applyMatrix4(baseLink.matrixWorld)
+  }
+
+  const worldPointToTcpPose = (point: THREE.Vector3) => {
+    const baseLink = robotRef.current?.links?.['base_link']
+    const localPoint = point.clone()
+    if (baseLink) {
+      localPoint.applyMatrix4(new THREE.Matrix4().copy(baseLink.matrixWorld).invert())
+    }
+    const currentTcp = useRobotStore.getState().tcpPose
+    return {
+      x: Math.round(localPoint.x * 1000 * 10) / 10,
+      y: Math.round(localPoint.y * 1000 * 10) / 10,
+      z: Math.round(localPoint.z * 1000 * 10) / 10,
+      rx: currentTcp.rx,
+      ry: currentTcp.ry,
+      rz: currentTcp.rz
+    }
+  }
+
+  const createWaypointLabel = (text: string, color: string) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 256
+    canvas.height = 96
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = 'rgba(17, 17, 20, 0.92)'
+      ctx.strokeStyle = color
+      ctx.lineWidth = 5
+      ctx.roundRect(8, 12, 240, 60, 16)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#ffffff'
+      ctx.font = '700 30px Inter, Segoe UI, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, 128, 42)
+    }
+    const texture = new THREE.CanvasTexture(canvas)
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true })
+    const sprite = new THREE.Sprite(material)
+    sprite.scale.set(0.28, 0.105, 1)
+    return sprite
+  }
+
+  const createWaypointMarker = (label: string, position: THREE.Vector3, color: number, labelColor: string) => {
+    const group = new THREE.Group()
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.075, 28, 28),
+      new THREE.MeshBasicMaterial({ color, depthTest: false })
+    )
+    marker.renderOrder = 20
+    marker.position.copy(position)
+    group.add(marker)
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.16, 0.012, 8, 48),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false })
+    )
+    ring.rotation.x = Math.PI / 2
+    ring.position.copy(position)
+    ring.renderOrder = 19
+    group.add(ring)
+
+    const labelSprite = createWaypointLabel(label, labelColor)
+    labelSprite.position.copy(position).add(new THREE.Vector3(0, 0.11, 0))
+    labelSprite.scale.set(0.52, 0.195, 1)
+    labelSprite.renderOrder = 30
+    group.add(labelSprite)
+
+    const beaconHeight = Math.max(0.08, Math.abs(position.y))
+    const beaconMidY = position.y / 2
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, beaconHeight, 12),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, depthTest: false })
+    )
+    beacon.position.set(position.x, beaconMidY, position.z)
+    beacon.renderOrder = 17
+    group.add(beacon)
+
+    const groundLineGeom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(position.x, 0, position.z),
+      position
+    ])
+    const groundLine = new THREE.Line(
+      groundLineGeom,
+      new THREE.LineDashedMaterial({ color, dashSize: 0.04, gapSize: 0.018, transparent: true, opacity: 0.8, depthTest: false })
+    )
+    groundLine.computeLineDistances()
+    group.add(groundLine)
+
+    return group
+  }
+
+  const disposeObjectTree = (obj: THREE.Object3D) => {
+    obj.traverse((child: any) => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) {
+        if (child.material.map) child.material.map.dispose()
+        child.material.dispose()
+      }
+    })
+  }
+
   // Automatically calculate jointAngles and tcpPose for all steps in the store (State Accumulator)
   useEffect(() => {
     const robot = robotRef.current
@@ -331,6 +455,95 @@ export default function Viewport3D() {
       useRobotStore.getState().reorderSteps(updatedSteps)
     }
   }, [steps, isRobotLoaded, isPlaying])
+
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    if (!simplePathGroupRef.current) {
+      simplePathGroupRef.current = new THREE.Group()
+      simplePathGroupRef.current.name = 'simple_motion_path_markers'
+      scene.add(simplePathGroupRef.current)
+    }
+
+    const markerRoot = simplePathGroupRef.current
+    markerRoot.children.forEach(disposeObjectTree)
+    markerRoot.clear()
+
+    let routeIndex = 1
+    const nextScreenLabels: SimpleWaypointScreenLabel[] = []
+    for (let index = 0; index < steps.length - 1; index++) {
+      const stepA = steps[index]
+      const stepB = steps[index + 1]
+      if (
+        stepA.type !== 'MoveL' ||
+        stepB.type !== 'MoveL' ||
+        !stepA.tcpPose ||
+        !stepB.tcpPose ||
+        !stepA.simpleBlockId ||
+        stepA.simpleBlockId !== stepB.simpleBlockId ||
+        stepA.simpleBlockRole !== 'moveA' ||
+        stepB.simpleBlockRole !== 'moveB'
+      ) {
+        continue
+      }
+
+      const posA = poseToVector(stepA.tcpPose)
+      const posB = poseToVector(stepB.tcpPose)
+      markerRoot.add(createWaypointMarker(`A${routeIndex}`, posA, 0x38bdf8, '#38bdf8'))
+      markerRoot.add(createWaypointMarker(`B${routeIndex}`, posB, 0xa78bfa, '#a78bfa'))
+      nextScreenLabels.push({
+        id: `${stepA.id}-screen-label`,
+        label: `A${routeIndex}`,
+        color: 'cyan',
+        position: posA.clone()
+      })
+      nextScreenLabels.push({
+        id: `${stepB.id}-screen-label`,
+        label: `B${routeIndex}`,
+        color: 'violet',
+        position: posB.clone()
+      })
+
+      const pathGeom = new THREE.BufferGeometry().setFromPoints([posA, posB])
+      const pathLine = new THREE.Line(
+        pathGeom,
+        new THREE.LineDashedMaterial({
+          color: 0x60a5fa,
+          dashSize: 0.05,
+          gapSize: 0.025,
+          transparent: true,
+          opacity: 0.95,
+          depthTest: false
+        })
+      )
+      pathLine.computeLineDistances()
+      pathLine.renderOrder = 18
+      markerRoot.add(pathLine)
+
+      const direction = posB.clone().sub(posA)
+      const length = direction.length()
+      if (length > 0.001) {
+        direction.normalize()
+        const arrow = new THREE.ArrowHelper(direction, posA, length, 0x60a5fa, 0.09, 0.045)
+        arrow.renderOrder = 18
+        markerRoot.add(arrow)
+      }
+
+      routeIndex++
+      index++
+    }
+
+    simpleWaypointLabelsRef.current = nextScreenLabels
+    setSimpleWaypointLabels(nextScreenLabels)
+
+    return () => {
+      markerRoot.children.forEach(disposeObjectTree)
+      markerRoot.clear()
+      simpleWaypointLabelsRef.current = []
+      setSimpleWaypointLabels([])
+    }
+  }, [steps, isRobotLoaded])
 
   // Initialize Scene, Camera, Renderer, Controls, Gizmos
   useEffect(() => {
@@ -638,8 +851,46 @@ export default function Viewport3D() {
     // Click to select joints or imported 3D objects (Raycasting)
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+
+    const getPointerWorldPoint = (event: PointerEvent | MouseEvent): THREE.Vector3 | null => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+
+      const candidates: THREE.Object3D[] = [
+        ...Array.from(loadedObjectsRef.current.values())
+      ]
+      if (robotRef.current) candidates.push(robotRef.current)
+
+      const hits = raycaster.intersectObjects(candidates, true)
+      if (hits.length > 0) return hits[0].point
+
+      const groundHit = new THREE.Vector3()
+      return raycaster.ray.intersectPlane(groundPlane, groundHit) ? groundHit : null
+    }
+
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault()
+      if (useRobotStore.getState().isPlaying) return
+
+      const point = getPointerWorldPoint(event)
+      if (!point) return
+
+      const rect = renderer.domElement.getBoundingClientRect()
+      setPointContextMenu({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+        pose: worldPointToTcpPose(point)
+      })
+    }
 
     const onPointerDown = (event: PointerEvent) => {
+      if (event.button === 0) {
+        setPointContextMenu(null)
+      }
+
       if (
         event.button !== 0 ||
         transformControls.dragging ||
@@ -716,6 +967,7 @@ export default function Viewport3D() {
     }
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
+    renderer.domElement.addEventListener('contextmenu', onContextMenu)
 
     // Measurement and Hitbox update function in animation loop
     const updateMeasurementAndHitboxes = () => {
@@ -1015,6 +1267,28 @@ export default function Viewport3D() {
       controls.update()
     }
 
+    const updateSimpleWaypointScreenLabels = () => {
+      const labels = simpleWaypointLabelsRef.current
+      if (labels.length === 0) return
+
+      const rect = renderer.domElement.getBoundingClientRect()
+      labels.forEach((item) => {
+        const el = document.getElementById(`simple-waypoint-label-${item.id}`)
+        if (!el) return
+
+        const projected = item.position.clone().project(camera)
+        const rawX = ((projected.x + 1) / 2) * rect.width
+        const rawY = ((-projected.y + 1) / 2) * rect.height
+        const x = Math.min(Math.max(rawX, 24), rect.width - 24)
+        const y = Math.min(Math.max(rawY, 24), rect.height - 24)
+        const isBehind = projected.z < -1 || projected.z > 1
+
+        el.style.display = labels.length > 0 ? 'flex' : 'none'
+        el.style.opacity = isBehind ? '0.45' : '1'
+        el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -130%)`
+      })
+    }
+
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
@@ -1032,6 +1306,7 @@ export default function Viewport3D() {
 
       // Update measurement line and debug hitboxes
       updateMeasurementAndHitboxes()
+      updateSimpleWaypointScreenLabels()
 
       renderer.render(scene, camera)
     }
@@ -1055,6 +1330,7 @@ export default function Viewport3D() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
       renderer.dispose()
       transformControls.dispose()
       if (container.contains(renderer.domElement)) {
@@ -1449,6 +1725,37 @@ export default function Viewport3D() {
     }
   }
 
+  const simpleMoveTargets = (() => {
+    const targets: Array<{ label: string; aStepId: string; bStepId: string }> = []
+    for (let index = 0; index < steps.length - 1; index++) {
+      const stepA = steps[index]
+      const stepB = steps[index + 1]
+      if (
+        stepA.type === 'MoveL' &&
+        stepB?.type === 'MoveL' &&
+        stepA.simpleBlockId &&
+        stepA.simpleBlockId === stepB.simpleBlockId &&
+        stepA.simpleBlockRole === 'moveA' &&
+        stepB.simpleBlockRole === 'moveB'
+      ) {
+        const moveNumber = targets.length + 1
+        targets.push({ label: `${moveNumber}`, aStepId: stepA.id, bStepId: stepB.id })
+        index++
+      }
+    }
+    return targets
+  })()
+
+  const setSimplePointFromContextMenu = (stepId: string) => {
+    if (!pointContextMenu) return
+    const pose = pointContextMenu.pose
+    const currentSteps = useRobotStore.getState().steps
+    useRobotStore.getState().reorderSteps(
+      currentSteps.map((step) => (step.id === stepId ? { ...step, tcpPose: pose } : step))
+    )
+    setPointContextMenu(null)
+  }
+
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden">
       {/* Dynamic measurement label */}
@@ -1478,6 +1785,64 @@ export default function Viewport3D() {
           <span className="text-xs font-bold uppercase tracking-wider">Cảnh báo: Phát hiện va chạm!</span>
         </div>
       )}
+
+      {pointContextMenu && (
+        <div
+          className="absolute z-30 w-56 rounded-lg border border-[#2d2d34] bg-[#111114]/98 shadow-2xl backdrop-blur-md overflow-hidden"
+          style={{
+            left: Math.min(pointContextMenu.x, Math.max(0, (containerRef.current?.clientWidth || 260) - 240)),
+            top: Math.min(pointContextMenu.y, Math.max(0, (containerRef.current?.clientHeight || 220) - 180))
+          }}
+        >
+          <div className="px-3 py-2 border-b border-white/10">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Đặt điểm tại vị trí này</div>
+            <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+              {Math.round(pointContextMenu.pose.x)}, {Math.round(pointContextMenu.pose.y)}, {Math.round(pointContextMenu.pose.z)}
+            </div>
+          </div>
+          {simpleMoveTargets.length === 0 ? (
+            <div className="px-3 py-2 text-[11px] text-slate-400">
+              Thêm block Move A→B trước, rồi chuột phải để set A/B.
+            </div>
+          ) : (
+            <div className="p-1.5 grid grid-cols-2 gap-1.5">
+              {simpleMoveTargets.map((target) => (
+                <Fragment key={target.label}>
+                  <button
+                    key={`a-${target.aStepId}`}
+                    onClick={() => setSimplePointFromContextMenu(target.aStepId)}
+                    className="h-10 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white cursor-pointer"
+                  >
+                    Set A{target.label}
+                  </button>
+                  <button
+                    key={`b-${target.bStepId}`}
+                    onClick={() => setSimplePointFromContextMenu(target.bStepId)}
+                    className="h-10 rounded bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white cursor-pointer"
+                  >
+                    Set B{target.label}
+                  </button>
+                </Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {simpleWaypointLabels.map((item) => (
+        <div
+          key={item.id}
+          id={`simple-waypoint-label-${item.id}`}
+          className={`absolute left-0 top-0 z-30 hidden items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-black shadow-2xl pointer-events-none ${
+            item.color === 'cyan'
+              ? 'border-cyan-300 bg-cyan-500 text-black shadow-cyan-500/30'
+              : 'border-violet-300 bg-violet-500 text-white shadow-violet-500/30'
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${item.color === 'cyan' ? 'bg-black' : 'bg-white'}`} />
+          {item.label}
+        </div>
+      ))}
 
       {/* Helper floating shortcuts hint */}
       <div className="absolute top-4 right-4 z-10 bg-[#1e1e24]/90 border border-blue-500/30 text-slate-300 px-3.5 py-2.5 rounded-lg shadow-xl backdrop-blur-sm max-w-[240px] pointer-events-none flex items-start gap-2">
