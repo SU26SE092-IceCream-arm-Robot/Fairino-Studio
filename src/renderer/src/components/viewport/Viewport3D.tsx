@@ -9,8 +9,8 @@ import URDFLoader from 'urdf-loader'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { solveIK } from '../../engine/robot/ikSolver'
-import { ShieldAlert, HelpCircle } from 'lucide-react'
-import { WorkflowStep } from '../../types/robot.types'
+import { AlertTriangle, Box, Crosshair, Hand, Pause, Play, RotateCw, ShieldAlert, Square } from 'lucide-react'
+import { JointAngles, TCPPose, WorkflowStep } from '../../types/robot.types'
 
 interface SimpleWaypointScreenLabel {
   id: string
@@ -51,6 +51,11 @@ export default function Viewport3D() {
     y: number
     pose: { x: number; y: number; z: number; rx: number; ry: number; rz: number }
   } | null>(null)
+  const [simulationMessage, setSimulationMessage] = useState<{
+    tone: 'warning' | 'danger'
+    title: string
+    body: string
+  } | null>(null)
   
   // Track loaded 3D models: map objectId -> THREE.Object3D
   const loadedObjectsRef = useRef<Map<string, THREE.Object3D>>(new Map())
@@ -65,11 +70,18 @@ export default function Viewport3D() {
   const isPlaying = useRobotStore((state) => state.isPlaying)
   const selectedJointName = useRobotStore((state) => state.selectedJointName)
   const steps = useRobotStore((state) => state.steps)
+  const selectedStepId = useRobotStore((state) => state.selectedStepId)
+  const setPlaying = useRobotStore((state) => state.setPlaying)
+  const setCurrentStepIndex = useRobotStore((state) => state.setCurrentStepIndex)
+  const setSelectedStepId = useRobotStore((state) => state.setSelectedStepId)
+  const setIKMode = useRobotStore((state) => state.setIKMode)
 
   const objects = useSceneStore((state) => state.objects)
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
   const collisionWarning = useSceneStore((state) => state.collisionWarning)
   const setCollisionWarning = useSceneStore((state) => state.setCollisionWarning)
+  const isDebugHitbox = useSceneStore((state) => state.isDebugHitbox)
+  const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
 
   // Helper to compute Forward Kinematics (FK)
   const computeFK = (angles: number[], robot: any) => {
@@ -119,6 +131,78 @@ export default function Viewport3D() {
     )
     const targetQuat = new THREE.Quaternion().setFromEuler(euler)
     return solveIK(targetPos, targetQuat, currentAngles as any, robot)
+  }
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+  const interpolatePose = (from: TCPPose, to: TCPPose, t: number): TCPPose => ({
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
+    z: from.z + (to.z - from.z) * t,
+    rx: from.rx + (to.rx - from.rx) * t,
+    ry: from.ry + (to.ry - from.ry) * t,
+    rz: from.rz + (to.rz - from.rz) * t
+  })
+
+  const applyRobotAngles = (robot: any, angles: JointAngles) => {
+    const jointNames = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+    jointNames.forEach((name, idx) => {
+      const joint = robot.joints[name]
+      if (joint) joint.setJointValue((angles[idx] * Math.PI) / 180)
+    })
+    robot.updateMatrixWorld(true)
+  }
+
+  const normalizeAngleDiff = (a: number, b: number) => {
+    let diff = Math.abs(a - b) % 360
+    if (diff > 180) diff = 360 - diff
+    return diff
+  }
+
+  const getPoseError = (actual: TCPPose, target: TCPPose) => {
+    const position = Math.hypot(actual.x - target.x, actual.y - target.y, actual.z - target.z)
+    const rotation = Math.max(
+      normalizeAngleDiff(actual.rx, target.rx),
+      normalizeAngleDiff(actual.ry, target.ry),
+      normalizeAngleDiff(actual.rz, target.rz)
+    )
+    return { position, rotation }
+  }
+
+  const isPoseCloseEnough = (actual: TCPPose, target: TCPPose) => {
+    const error = getPoseError(actual, target)
+    return error.position <= 8 && error.rotation <= 8
+  }
+
+  const solveReachablePose = (targetPose: TCPPose, seedAngles: JointAngles) => {
+    const robot = robotRef.current
+    if (!robot) return { ok: false as const, reason: 'Robot chưa sẵn sàng.' }
+
+    let current = [...seedAngles] as JointAngles
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const solved = computeIK(targetPose, current, robot)
+      if (!solved) return { ok: false as const, reason: 'Không giải được IK cho điểm này.' }
+
+      current = solved as JointAngles
+      const actualPose = computeFK(current, robot)
+      if (isPoseCloseEnough(actualPose, targetPose)) {
+        return { ok: true as const, angles: current }
+      }
+    }
+
+    const finalPose = computeFK(current, robot)
+    const error = getPoseError(finalPose, targetPose)
+    return {
+      ok: false as const,
+      reason: `Điểm ngoài vùng làm việc. Sai lệch còn ${Math.round(error.position)} mm.`
+    }
+  }
+
+  const showSimulationMessage = (tone: 'warning' | 'danger', title: string, body: string) => {
+    setSimulationMessage({ tone, title, body })
+    window.setTimeout(() => {
+      setSimulationMessage(null)
+    }, 4500)
   }
 
 
@@ -240,77 +324,15 @@ export default function Viewport3D() {
     }
   }
 
-  const createWaypointLabel = (text: string, color: string) => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 96
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = 'rgba(17, 17, 20, 0.92)'
-      ctx.strokeStyle = color
-      ctx.lineWidth = 5
-      ctx.roundRect(8, 12, 240, 60, 16)
-      ctx.fill()
-      ctx.stroke()
-      ctx.fillStyle = '#ffffff'
-      ctx.font = '700 30px Inter, Segoe UI, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(text, 128, 42)
-    }
-    const texture = new THREE.CanvasTexture(canvas)
-    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true })
-    const sprite = new THREE.Sprite(material)
-    sprite.scale.set(0.28, 0.105, 1)
-    return sprite
-  }
-
-  const createWaypointMarker = (label: string, position: THREE.Vector3, color: number, labelColor: string) => {
+  const createWaypointMarker = (position: THREE.Vector3, color: number) => {
     const group = new THREE.Group()
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.075, 28, 28),
+      new THREE.SphereGeometry(0.035, 18, 18),
       new THREE.MeshBasicMaterial({ color, depthTest: false })
     )
     marker.renderOrder = 20
     marker.position.copy(position)
     group.add(marker)
-
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.16, 0.012, 8, 48),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false })
-    )
-    ring.rotation.x = Math.PI / 2
-    ring.position.copy(position)
-    ring.renderOrder = 19
-    group.add(ring)
-
-    const labelSprite = createWaypointLabel(label, labelColor)
-    labelSprite.position.copy(position).add(new THREE.Vector3(0, 0.11, 0))
-    labelSprite.scale.set(0.52, 0.195, 1)
-    labelSprite.renderOrder = 30
-    group.add(labelSprite)
-
-    const beaconHeight = Math.max(0.08, Math.abs(position.y))
-    const beaconMidY = position.y / 2
-    const beacon = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.012, beaconHeight, 12),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, depthTest: false })
-    )
-    beacon.position.set(position.x, beaconMidY, position.z)
-    beacon.renderOrder = 17
-    group.add(beacon)
-
-    const groundLineGeom = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(position.x, 0, position.z),
-      position
-    ])
-    const groundLine = new THREE.Line(
-      groundLineGeom,
-      new THREE.LineDashedMaterial({ color, dashSize: 0.04, gapSize: 0.018, transparent: true, opacity: 0.8, depthTest: false })
-    )
-    groundLine.computeLineDistances()
-    group.add(groundLine)
 
     return group
   }
@@ -457,6 +479,129 @@ export default function Viewport3D() {
   }, [steps, isRobotLoaded, isPlaying])
 
   useEffect(() => {
+    const robot = robotRef.current
+    if (!isPlaying || !robot || steps.length === 0) return
+
+    let cancelled = false
+
+    const animateJoints = async (targetAngles: JointAngles, duration: number) => {
+      const frameCount = Math.max(12, Math.round(duration / 16))
+      const interval = duration / frameCount
+      const startAngles = [...useRobotStore.getState().jointAngles] as JointAngles
+
+      for (let frame = 1; frame <= frameCount; frame++) {
+        if (cancelled || !useRobotStore.getState().isPlaying) return
+        const t = frame / frameCount
+        const interpolated = startAngles.map((start, idx) => start + (targetAngles[idx] - start) * t) as JointAngles
+        if (candidateWouldCollide(interpolated)) {
+          showSimulationMessage(
+            'danger',
+            'Mô phỏng đã dừng',
+            'Đường chạy đi vào vùng va chạm. Robot được giữ tại frame an toàn trước đó.'
+          )
+          setCollisionWarning(true)
+          setPlaying(false)
+          return
+        }
+        setJointAngles(interpolated)
+        await sleep(interval)
+      }
+    }
+
+    const animateCartesian = async (targetPose: TCPPose, duration: number) => {
+      const frameCount = Math.max(12, Math.round(duration / 16))
+      const interval = duration / frameCount
+      let seedAngles = [...useRobotStore.getState().jointAngles] as JointAngles
+      const startPose = computeFK(seedAngles, robot)
+
+      for (let frame = 1; frame <= frameCount; frame++) {
+        if (cancelled || !useRobotStore.getState().isPlaying) return
+        const t = frame / frameCount
+        const pose = interpolatePose(startPose, targetPose, t)
+        const solved = computeIK(pose, seedAngles, robot)
+        if (solved) {
+          seedAngles = solved as JointAngles
+          const actualPose = computeFK(seedAngles, robot)
+          if (!isPoseCloseEnough(actualPose, pose)) {
+            showSimulationMessage(
+              'warning',
+              'Điểm ngoài vùng làm việc',
+              'Robot không thể đi tới pose yêu cầu trong giới hạn vật lý hiện tại.'
+            )
+            setPlaying(false)
+            return
+          }
+          if (candidateWouldCollide(seedAngles)) {
+            showSimulationMessage(
+              'danger',
+              'Mô phỏng đã dừng',
+              'Đường chạy đi vào vùng va chạm. Robot được giữ tại frame an toàn trước đó.'
+            )
+            setCollisionWarning(true)
+            setPlaying(false)
+            return
+          }
+          setJointAngles(seedAngles)
+        } else {
+          showSimulationMessage(
+            'warning',
+            'Không giải được IK',
+            'Robot không tìm được cấu hình khớp hợp lệ cho pose này.'
+          )
+          setPlaying(false)
+          return
+        }
+        await sleep(interval)
+      }
+    }
+
+    const runViewportSimulation = async () => {
+      let index = useRobotStore.getState().currentStepIndex
+      if (index >= steps.length) {
+        index = 0
+        setCurrentStepIndex(0)
+      }
+
+      while (!cancelled && index < steps.length && useRobotStore.getState().isPlaying) {
+        const step = useRobotStore.getState().steps[index]
+        if (!step) break
+
+        if (getCollisionState(robot)) {
+          setCollisionWarning(true)
+          setPlaying(false)
+          break
+        }
+
+        setSelectedStepId(step.id)
+        const speed = Math.max(0.1, useRobotStore.getState().playbackSpeed)
+        const duration = 1000 / speed
+
+        if (step.type === 'MoveL' && step.tcpPose) {
+          await animateCartesian(step.tcpPose, duration)
+        } else if (step.jointAngles) {
+          await animateJoints(step.jointAngles, duration)
+        } else if (step.type === 'WaitMs' && step.delayMs) {
+          await sleep(step.delayMs / speed)
+        } else {
+          await sleep(180 / speed)
+        }
+
+        if (cancelled || !useRobotStore.getState().isPlaying) break
+        index++
+        setCurrentStepIndex(index)
+      }
+
+      if (!cancelled) setPlaying(false)
+    }
+
+    void runViewportSimulation()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isPlaying])
+
+  useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
 
@@ -490,8 +635,8 @@ export default function Viewport3D() {
 
       const posA = poseToVector(stepA.tcpPose)
       const posB = poseToVector(stepB.tcpPose)
-      markerRoot.add(createWaypointMarker(`A${routeIndex}`, posA, 0x38bdf8, '#38bdf8'))
-      markerRoot.add(createWaypointMarker(`B${routeIndex}`, posB, 0xa78bfa, '#a78bfa'))
+      markerRoot.add(createWaypointMarker(posA, 0x38bdf8))
+      markerRoot.add(createWaypointMarker(posB, 0xa78bfa))
       nextScreenLabels.push({
         id: `${stepA.id}-screen-label`,
         label: `A${routeIndex}`,
@@ -1026,31 +1171,49 @@ export default function Viewport3D() {
         // Links skipped for ground collision (they're always near the ground by design)
         const SKIP_GROUND_HITBOX = ['base_link', 'shoulder_link']
         const GROUND_Y = 0.005 // 5mm threshold
+        const NEAR_DISTANCE = 0.05 // 50mm warning threshold
+
+        const getOBBToBoxDistance = (obb: OBB, box: THREE.Box3) => {
+          const boxCenter = new THREE.Vector3()
+          box.getCenter(boxCenter)
+          const pointOnOBB = new THREE.Vector3()
+          const pointOnBox = new THREE.Vector3()
+          obb.clampPoint(boxCenter, pointOnOBB)
+          box.clampPoint(pointOnOBB, pointOnBox)
+          return pointOnOBB.distanceTo(pointOnBox)
+        }
 
         for (const [linkName, obb] of linkOBBMap.entries()) {
           const nameLower = linkName.toLowerCase()
 
           // Ground collision: check if any OBB corner dips below GROUND_Y
           let isCollidingGround = false
+          let isNearGround = false
           if (!SKIP_GROUND_HITBOX.some(s => nameLower.includes(s))) {
             const { center, halfSize, rotation } = obb
+            let minCornerY = Infinity
             outerGround: for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
               const corner = new THREE.Vector3(sx * halfSize.x, sy * halfSize.y, sz * halfSize.z)
                 .applyMatrix3(rotation).add(center)
+              minCornerY = Math.min(minCornerY, corner.y)
               if (corner.y < GROUND_Y) { isCollidingGround = true; break outerGround }
             }
+            isNearGround = !isCollidingGround && minCornerY < NEAR_DISTANCE
           }
 
           // Auxiliary object collision
           let isCollidingObj = false
+          let isNearObj = false
           if (!isCollidingGround) {
             for (const obj of activeObjects) {
               if (obb.intersectsBox3(obj.box)) { isCollidingObj = true; break }
+              if (getOBBToBoxDistance(obb, obj.box) < NEAR_DISTANCE) isNearObj = true
             }
           }
 
           // Self-collision with paired links
           let isCollidingSelf = false
+          let isNearSelf = false
           if (!isCollidingGround && !isCollidingObj) {
             for (const pair of SELF_COLLISION_PAIRS) {
               if (nameLower.includes(pair.a) || nameLower.includes(pair.b)) {
@@ -1060,11 +1223,14 @@ export default function Viewport3D() {
                   if (k.toLowerCase().includes(otherKey)) { otherOBB = o; break }
                 }
                 if (otherOBB && obb.intersectsOBB(otherOBB)) { isCollidingSelf = true; break }
+                if (otherOBB && getOBBDistance(obb, otherOBB).distance < NEAR_DISTANCE) isNearSelf = true
               }
             }
           }
 
-          const color = (isCollidingGround || isCollidingObj || isCollidingSelf) ? 0xf43f5e : 0xeab308
+          const isColliding = isCollidingGround || isCollidingObj || isCollidingSelf
+          const isNear = isNearGround || isNearObj || isNearSelf
+          const color = isColliding ? 0xf43f5e : isNear ? 0xeab308 : 0x22c55e
           const wireframe = createOBBWireframe(obb, color)
           scene.add(wireframe)
           hitboxHelpersRef.current.push(wireframe)
@@ -1076,7 +1242,13 @@ export default function Viewport3D() {
           for (const obb of linkOBBMap.values()) {
             if (obb.intersectsBox3(obj.box)) { isColliding = true; break }
           }
-          const color = isColliding ? 0xf43f5e : 0x10b981
+          let isNear = false
+          if (!isColliding) {
+            for (const obb of linkOBBMap.values()) {
+              if (getOBBToBoxDistance(obb, obj.box) < NEAR_DISTANCE) { isNear = true; break }
+            }
+          }
+          const color = isColliding ? 0xf43f5e : isNear ? 0xeab308 : 0x22c55e
           const helper = new THREE.Box3Helper(obj.box, new THREE.Color(color)) as any as THREE.LineSegments
           scene.add(helper)
           hitboxHelpersRef.current.push(helper)
@@ -1285,7 +1457,7 @@ export default function Viewport3D() {
 
         el.style.display = labels.length > 0 ? 'flex' : 'none'
         el.style.opacity = isBehind ? '0.45' : '1'
-        el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -130%)`
+        el.style.transform = `translate(${x}px, ${y}px) translate(8px, -50%)`
       })
     }
 
@@ -1317,15 +1489,19 @@ export default function Viewport3D() {
       if (!container) return
       const w = container.clientWidth
       const h = container.clientHeight
+      if (w <= 0 || h <= 0) return
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
     }
+    const resizeObserver = new ResizeObserver(handleResize)
+    resizeObserver.observe(container)
     window.addEventListener('resize', handleResize)
 
     // Clean up
     return () => {
       cancelAnimationFrame(animationFrameId)
+      resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
@@ -1339,11 +1515,7 @@ export default function Viewport3D() {
     }
   }, [])
 
-  // Bounding box collision detection (Ground, Self, and Object collision)
-  const checkCollisions = () => {
-    const robot = robotRef.current
-    if (!robot) return
-
+  const getCollisionState = (robot: any) => {
     // 1. Compute OBB for each named URDF link, stopping traversal at link boundaries
     const allLinkObjs = new Set<THREE.Object3D>(
       Object.values(robot.links as Record<string, THREE.Object3D>)
@@ -1401,7 +1573,26 @@ export default function Viewport3D() {
       }
     }
 
-    const isColliding = groundCollide || selfCollide || objectCollide
+    return groundCollide || selfCollide || objectCollide
+  }
+
+  const candidateWouldCollide = (angles: JointAngles) => {
+    const robot = robotRef.current
+    if (!robot) return false
+
+    const currentAngles = [...useRobotStore.getState().jointAngles] as JointAngles
+    applyRobotAngles(robot, angles)
+    const isColliding = getCollisionState(robot)
+    applyRobotAngles(robot, currentAngles)
+    return isColliding
+  }
+
+  // Bounding box collision detection (Ground, Self, and Object collision)
+  const checkCollisions = () => {
+    const robot = robotRef.current
+    if (!robot) return
+
+    const isColliding = getCollisionState(robot)
     if (useSceneStore.getState().collisionWarning !== isColliding) {
       setCollisionWarning(isColliding)
     }
@@ -1750,10 +1941,52 @@ export default function Viewport3D() {
     if (!pointContextMenu) return
     const pose = pointContextMenu.pose
     const currentSteps = useRobotStore.getState().steps
+    const currentAngles = useRobotStore.getState().jointAngles
+    const solved = solveReachablePose(pose, currentAngles)
+    if (!solved.ok) {
+      showSimulationMessage(
+        'warning',
+        'Không thể đặt điểm',
+        solved.reason
+      )
+      setPointContextMenu(null)
+      return
+    }
+
     useRobotStore.getState().reorderSteps(
-      currentSteps.map((step) => (step.id === stepId ? { ...step, tcpPose: pose } : step))
+      currentSteps.map((step) => (
+        step.id === stepId
+          ? {
+              ...step,
+              tcpPose: pose,
+              jointAngles: solved.angles
+            }
+          : step
+      ))
     )
     setPointContextMenu(null)
+  }
+
+  const togglePlay = () => {
+    if (useRobotStore.getState().isPlaying) {
+      setPlaying(false)
+      return
+    }
+    const currentSteps = useRobotStore.getState().steps
+    if (currentSteps.length === 0) return
+    const selectedIndex = selectedStepId
+      ? currentSteps.findIndex((step) => step.id === selectedStepId)
+      : -1
+    if (selectedIndex >= 0) {
+      setCurrentStepIndex(selectedIndex)
+    }
+    setPlaying(true)
+  }
+
+  const stopSimulation = () => {
+    setPlaying(false)
+    setCurrentStepIndex(0)
+    setSelectedStepId(null)
   }
 
   return (
@@ -1783,6 +2016,24 @@ export default function Viewport3D() {
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-rose-600/95 text-white px-4 py-2.5 rounded-lg shadow-lg border border-rose-500 animate-pulse">
           <ShieldAlert size={18} />
           <span className="text-xs font-bold uppercase tracking-wider">Cảnh báo: Phát hiện va chạm!</span>
+        </div>
+      )}
+
+      {simulationMessage && (
+        <div
+          className={`absolute top-16 left-4 z-30 max-w-md rounded-lg border px-4 py-3 shadow-2xl backdrop-blur-md ${
+            simulationMessage.tone === 'danger'
+              ? 'border-rose-500/70 bg-rose-950/95 text-rose-50'
+              : 'border-amber-500/70 bg-amber-950/95 text-amber-50'
+          }`}
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={17} className={simulationMessage.tone === 'danger' ? 'text-rose-300' : 'text-amber-300'} />
+            <div className="min-w-0">
+              <div className="text-xs font-black uppercase tracking-wider">{simulationMessage.title}</div>
+              <div className="mt-1 text-[11px] leading-relaxed text-slate-100">{simulationMessage.body}</div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1833,32 +2084,74 @@ export default function Viewport3D() {
         <div
           key={item.id}
           id={`simple-waypoint-label-${item.id}`}
-          className={`absolute left-0 top-0 z-30 hidden items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-black shadow-2xl pointer-events-none ${
+          className={`absolute left-0 top-0 z-30 hidden items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-bold shadow-lg pointer-events-none ${
             item.color === 'cyan'
-              ? 'border-cyan-300 bg-cyan-500 text-black shadow-cyan-500/30'
-              : 'border-violet-300 bg-violet-500 text-white shadow-violet-500/30'
+              ? 'border-cyan-300 bg-cyan-500/95 text-black shadow-cyan-500/20'
+              : 'border-violet-300 bg-violet-500/95 text-white shadow-violet-500/20'
           }`}
         >
-          <span className={`h-2 w-2 rounded-full ${item.color === 'cyan' ? 'bg-black' : 'bg-white'}`} />
+          <span className={`h-1.5 w-1.5 rounded-full ${item.color === 'cyan' ? 'bg-black' : 'bg-white'}`} />
           {item.label}
         </div>
       ))}
 
-      {/* Helper floating shortcuts hint */}
-      <div className="absolute top-4 right-4 z-10 bg-[#1e1e24]/90 border border-blue-500/30 text-slate-300 px-3.5 py-2.5 rounded-lg shadow-xl backdrop-blur-sm max-w-[240px] pointer-events-none flex items-start gap-2">
-        <HelpCircle size={14} className="text-blue-400 shrink-0 mt-0.5" />
-        <div className="text-[10px] space-y-1.5">
-          <span className="font-bold text-white block">Phím tắt điều hướng:</span>
-          <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">W</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">A</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">S</kbd> <kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">D</kbd> - Di chuyển Camera</div>
-          {selectedObjectId && (
-            <>
-              <div className="border-t border-white/10 my-1"></div>
-              <span className="font-bold text-white block">Thiết lập vật thể:</span>
-              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">1</kbd> - Dịch chuyển (Translate)</div>
-              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">2</kbd> - Xoay (Rotate)</div>
-              <div><kbd className="px-1.5 py-0.5 bg-black/40 rounded text-slate-200">3</kbd> - Co giãn (Scale)</div>
-            </>
-          )}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 rounded-lg border border-[#2d2d34] bg-[#101014]/90 p-1.5 shadow-2xl backdrop-blur-md">
+        <button
+          onClick={() => setIKMode(false)}
+          className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+            !isIKMode ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+          }`}
+          title="Joint (FK)"
+          aria-label="Joint FK mode"
+        >
+          <Hand size={17} />
+        </button>
+        <button
+          onClick={() => setIKMode(true)}
+          className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+            isIKMode ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+          }`}
+          title="Cartesian (IK)"
+          aria-label="Cartesian IK mode"
+        >
+          <Crosshair size={17} />
+        </button>
+        <button
+          onClick={() => setDebugHitbox(!isDebugHitbox)}
+          className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+            isDebugHitbox ? 'bg-amber-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+          }`}
+          title="Hiện hitbox"
+          aria-label="Toggle hitbox display"
+        >
+          <Box size={17} />
+        </button>
+        <div className="mx-1 h-6 w-px bg-white/10" />
+        <button
+          onClick={togglePlay}
+          className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+            isPlaying ? 'bg-amber-600 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-500'
+          }`}
+          title={isPlaying ? 'Tạm dừng mô phỏng' : 'Chạy mô phỏng'}
+          aria-label={isPlaying ? 'Pause simulation' : 'Play simulation'}
+        >
+          {isPlaying ? <Pause size={17} /> : <Play size={17} />}
+        </button>
+        <button
+          onClick={stopSimulation}
+          className="h-10 w-10 rounded-md flex items-center justify-center bg-rose-600 text-white transition hover:bg-rose-500 cursor-pointer"
+          title="Dừng mô phỏng"
+          aria-label="Stop simulation"
+        >
+          <Square size={16} />
+        </button>
+        <div className="mx-1 h-6 w-px bg-white/10" />
+        <div
+          className="h-10 w-10 rounded-md flex items-center justify-center text-slate-500"
+          title="WASD di chuyển camera"
+          aria-label="WASD camera movement hint"
+        >
+          <RotateCw size={16} />
         </div>
       </div>
 
