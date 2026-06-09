@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: fairobot-studio
+appId: com.fairobot.studio
+productName: FaiRobot Studio
 directories:
   buildResources: build
 files:
@@ -12,12 +12,24 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: fairobot-studio
+  executableName: FaiRobot Studio
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: FaiRobot-Studio-${version}-Setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  license: build/license.txt
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
