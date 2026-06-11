@@ -7,6 +7,8 @@ const api = {
   showOpenDialog: (options: any) => ipcRenderer.invoke('show-open-dialog', options),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('write-file', filePath, content),
   readFile: (filePath: string) => ipcRenderer.invoke('read-file', filePath),
+  readBlockLibrary: () => ipcRenderer.invoke('read-block-library'),
+  writeBlockLibrary: (content: string) => ipcRenderer.invoke('write-block-library', content),
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: any, action: string) => callback(action)
     ipcRenderer.on('menu-action', listener)

@@ -1,0 +1,83 @@
+FAIROBOT STUDIO - TERMS OF SERVICE AND END USER LICENSE AGREEMENT
+
+Last updated: 2026-06-09
+
+Please read these terms before installing or using FaiRobot Studio.
+By installing or using this software, you agree to these terms.
+
+1. Software Purpose
+
+FaiRobot Studio is a robot workflow editing, simulation, and code preview tool
+intended for development, education, testing, and workflow preparation for
+Fairino FR5 robot-related use cases.
+
+2. Beta Software Notice
+
+This software is provided as a beta version. Features, simulation behavior,
+robot models, collision checks, and generated code may change over time.
+You must verify all generated robot programs before running them on physical
+robot hardware.
+
+3. Safety Responsibility
+
+Robot operation can be dangerous. Simulation results are advisory and do not
+replace real robot safety systems, physical guards, emergency stop procedures,
+manufacturer documentation, operator training, or on-site risk assessment.
+
+Before using any workflow on a physical robot, you are responsible for:
+
+- reviewing all generated Lua code,
+- validating robot reachability and motion paths,
+- checking tool, payload, and fixture setup,
+- confirming safe speeds and accelerations,
+- testing in a controlled environment,
+- following all manufacturer and workplace safety procedures.
+
+4. License Grant
+
+Subject to these terms, you are granted a limited, non-exclusive,
+non-transferable right to install and use FaiRobot Studio for internal
+development, testing, education, and workflow preparation.
+
+5. Restrictions
+
+You may not:
+
+- use the software to bypass robot safety mechanisms,
+- represent simulation output as a guaranteed safe physical robot path,
+- remove copyright or attribution notices,
+- redistribute modified installers without permission from the project owner,
+- use the software in violation of applicable laws or safety regulations.
+
+6. Data and Files
+
+FaiRobot Studio may read and write project files, Lua scripts, and local block
+library files selected or created by the user. You are responsible for managing
+and backing up your own project files.
+
+7. No Warranty
+
+The software is provided "as is" and "as available", without warranties of any
+kind, express or implied, including but not limited to warranties of
+merchantability, fitness for a particular purpose, and non-infringement.
+
+8. Limitation of Liability
+
+To the maximum extent permitted by law, the authors and contributors are not
+liable for any direct, indirect, incidental, special, consequential, or punitive
+damages, including but not limited to equipment damage, production loss, data
+loss, injury, or unsafe robot operation arising from use of the software.
+
+9. Updates
+
+The software may be updated to improve features, safety checks, UI behavior,
+or generated output. Continued use after updates means you accept the updated
+software behavior and terms included with that version.
+
+10. Contact
+
+For project information, source code, or issue reporting, refer to:
+https://github.com/SU26SE092-IceCream-arm-Robot/Fairino-Studio
+
+If you do not agree to these terms, cancel installation and do not use the
+software.

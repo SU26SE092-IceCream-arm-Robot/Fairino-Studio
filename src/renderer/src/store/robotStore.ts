@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import { JointAngles, TCPPose, WorkflowStep } from '../types/robot.types'
+import {
+  JointAngles,
+  SimpleModuleTemplate,
+  SimpleWorkflowTemplate,
+  TCPPose,
+  WorkflowStep
+} from '../types/robot.types'
 
 interface RobotState {
   // Robot Hardware Config & Current values
@@ -15,6 +21,11 @@ interface RobotState {
   // Workflow Steps
   steps: WorkflowStep[]
   selectedStepId: string | null
+  simpleBlocklyWorkspace: unknown | null
+  projectModules: SimpleModuleTemplate[]
+  projectWorkflowTemplates: SimpleWorkflowTemplate[]
+  simpleWorkspaceDirtyFromSteps: boolean
+  simplePointPickTarget: { stepId: string; label: string } | null
   
   // Simulation State
   isPlaying: boolean
@@ -23,7 +34,7 @@ interface RobotState {
   currentStepIndex: number
   mode: 'normal' | 'advanced'
   language: 'vi' | 'en'
-  lengthUnit: 'mm' | 'm'
+  lengthUnit: 'mm' | 'cm' | 'm'
   angleUnit: 'deg' | 'rad'
   
   // Actions
@@ -34,7 +45,7 @@ interface RobotState {
   setCurrentFilePath: (path: string | null) => void
   setMode: (mode: 'normal' | 'advanced') => void
   setLanguage: (lang: 'vi' | 'en') => void
-  setLengthUnit: (unit: 'mm' | 'm') => void
+  setLengthUnit: (unit: 'mm' | 'cm' | 'm') => void
   setAngleUnit: (unit: 'deg' | 'rad') => void
   
   // Workflow actions
@@ -42,6 +53,12 @@ interface RobotState {
   removeStep: (id: string) => void
   updateStep: (id: string, updated: Partial<WorkflowStep>) => void
   reorderSteps: (newSteps: WorkflowStep[]) => void
+  syncStepsFromBlockly: (steps: WorkflowStep[], workspaceJson: unknown) => void
+  setSimpleBlocklyWorkspace: (json: unknown | null) => void
+  setProjectModules: (modules: SimpleModuleTemplate[]) => void
+  setProjectWorkflowTemplates: (templates: SimpleWorkflowTemplate[]) => void
+  setSimplePointPickTarget: (target: { stepId: string; label: string } | null) => void
+  markSimpleWorkspaceClean: () => void
   setSelectedStepId: (id: string | null) => void
   
   // Simulation actions
@@ -54,7 +71,7 @@ interface RobotState {
 
 export const useRobotStore = create<RobotState>((set) => ({
   robotModel: 'FR5',
-  jointAngles: [0, -30, 90, 0, 60, 0],
+  jointAngles: [0, 0, 0, 0, 0, 0],
   tcpPose: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 },
   isIKMode: false,
   
@@ -63,6 +80,11 @@ export const useRobotStore = create<RobotState>((set) => ({
   
   steps: [],
   selectedStepId: null,
+  simpleBlocklyWorkspace: null,
+  projectModules: [],
+  projectWorkflowTemplates: [],
+  simpleWorkspaceDirtyFromSteps: false,
+  simplePointPickTarget: null,
   
   isPlaying: false,
   playbackSpeed: 1,
@@ -91,7 +113,8 @@ export const useRobotStore = create<RobotState>((set) => ({
       }
       return {
         steps: [...state.steps, newStep],
-        selectedStepId: newStep.id
+        selectedStepId: newStep.id,
+        simpleWorkspaceDirtyFromSteps: true
       }
     }),
     
@@ -100,16 +123,31 @@ export const useRobotStore = create<RobotState>((set) => ({
       const filtered = state.steps.filter((s) => s.id !== id)
       return {
         steps: filtered,
-        selectedStepId: state.selectedStepId === id ? null : state.selectedStepId
+        selectedStepId: state.selectedStepId === id ? null : state.selectedStepId,
+        simpleWorkspaceDirtyFromSteps: true
       }
     }),
     
   updateStep: (id, updated) =>
     set((state) => ({
-      steps: state.steps.map((s) => (s.id === id ? { ...s, ...updated } : s))
+      steps: state.steps.map((s) => (s.id === id ? { ...s, ...updated } : s)),
+      simpleWorkspaceDirtyFromSteps: true
     })),
     
-  reorderSteps: (newSteps) => set({ steps: newSteps }),
+  reorderSteps: (newSteps) => set({ steps: newSteps, simpleWorkspaceDirtyFromSteps: true }),
+
+  syncStepsFromBlockly: (steps, workspaceJson) =>
+    set({
+      steps,
+      simpleBlocklyWorkspace: workspaceJson,
+      simpleWorkspaceDirtyFromSteps: false
+    }),
+
+  setSimpleBlocklyWorkspace: (json) => set({ simpleBlocklyWorkspace: json }),
+  setProjectModules: (modules) => set({ projectModules: modules }),
+  setProjectWorkflowTemplates: (templates) => set({ projectWorkflowTemplates: templates }),
+  setSimplePointPickTarget: (target) => set({ simplePointPickTarget: target }),
+  markSimpleWorkspaceClean: () => set({ simpleWorkspaceDirtyFromSteps: false }),
   
   setSelectedStepId: (id) => set({ selectedStepId: id }),
   

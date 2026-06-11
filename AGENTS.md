@@ -35,7 +35,7 @@ When starting a new session:
 
 ## Session end
 
-When the user says "lưu context", "save context", "kết thúc phiên", or "save session memory":
+When the user says "lưu context", "save context", "kết thúc phiên", or "save sesasion memory":
 1. Use the `save-rag-context` skill.
 2. Update `.project-memory/active-context.md`.
 3. Create a concise session summary in `.project-memory/sessions/`.

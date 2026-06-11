@@ -1,6 +1,6 @@
 import { useRobotStore } from '../../store/robotStore'
 import { WorkflowStep } from '../../types/robot.types'
-import { Play, Pause, Square, Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles, HelpCircle } from 'lucide-react'
+import { Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles, HelpCircle } from 'lucide-react'
 import BlockWorkspace from './BlockWorkspace'
 import { translations } from '../../i18n/translations'
 
@@ -38,9 +38,7 @@ export default function WorkflowPanel() {
 
   // Simulation states
   const isPlaying = useRobotStore((state) => state.isPlaying)
-  const setPlaying = useRobotStore((state) => state.setPlaying)
   const currentStepIndex = useRobotStore((state) => state.currentStepIndex)
-  const setCurrentStepIndex = useRobotStore((state) => state.setCurrentStepIndex)
 
   const handleRecordWaypoint = (type: 'MoveJ' | 'MoveL') => {
     const pointNum = steps.filter(s => s.type === 'MoveJ' || s.type === 'MoveL').length + 1
@@ -82,71 +80,6 @@ export default function WorkflowPanel() {
     if (step.jointAngles) {
       setJointAngles(step.jointAngles)
     }
-  }
-
-  // Simulation execution loop with smooth joint angle interpolation
-  const runSimulation = async () => {
-    if (steps.length === 0) return
-    setPlaying(true)
-    
-    let currentIndex = currentStepIndex
-    if (currentIndex >= steps.length) {
-      currentIndex = 0
-      setCurrentStepIndex(0)
-    }
-
-    while (currentIndex < steps.length && useRobotStore.getState().isPlaying) {
-      const step = steps[currentIndex]
-      setSelectedStepId(step.id)
-      
-      if (step.jointAngles) {
-        // Smoothly interpolate from current joints to target joints
-        const startAngles = [...useRobotStore.getState().jointAngles]
-        const targetAngles = step.jointAngles
-        const duration = 1000 / useRobotStore.getState().playbackSpeed // 1 second duration adjusted by playback speed
-        const stepsCount = 30 // 30 frames of animation
-        const intervalTime = duration / stepsCount
-
-        for (let i = 1; i <= stepsCount; i++) {
-          if (!useRobotStore.getState().isPlaying) break
-          const t = i / stepsCount
-          const interpolated = startAngles.map((start, idx) => {
-            const target = targetAngles[idx]
-            return start + (target - start) * t
-          })
-          setJointAngles(interpolated as any)
-          await new Promise(resolve => setTimeout(resolve, intervalTime))
-        }
-      } else if (step.type === 'WaitMs' && step.delayMs) {
-        // Wait delay duration
-        const waitTime = step.delayMs / useRobotStore.getState().playbackSpeed
-        await new Promise(resolve => setTimeout(resolve, waitTime))
-      } else {
-        // Fast skip for other steps like SetDO
-        await new Promise(resolve => setTimeout(resolve, 200 / useRobotStore.getState().playbackSpeed))
-      }
-
-      if (!useRobotStore.getState().isPlaying) break
-
-      currentIndex++
-      setCurrentStepIndex(currentIndex)
-    }
-
-    setPlaying(false)
-  }
-
-  const handlePlay = () => {
-    if (isPlaying) {
-      setPlaying(false)
-    } else {
-      setTimeout(() => runSimulation(), 10)
-    }
-  }
-
-  const handleStop = () => {
-    setPlaying(false)
-    setCurrentStepIndex(0)
-    setSelectedStepId(null)
   }
 
   const moveStep = (index: number, direction: 'up' | 'down') => {
@@ -392,29 +325,6 @@ export default function WorkflowPanel() {
           </div>
         </>
       )}
-
-      {/* Simulation Controls (Common) */}
-      <div className="p-4 border-t border-[#2d2d34] bg-[#121214] flex items-center justify-between shrink-0">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{t('simulation')}</span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handlePlay}
-            className={`p-2 rounded transition cursor-pointer ${
-              isPlaying ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-            }`}
-            title={isPlaying ? t('pause') : t('play')}
-          >
-            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-          </button>
-          <button
-            onClick={handleStop}
-            className="p-2 bg-rose-600 hover:bg-rose-500 text-white rounded transition cursor-pointer"
-            title={t('stop')}
-          >
-            <Square size={14} />
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

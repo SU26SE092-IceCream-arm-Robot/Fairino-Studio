@@ -8,6 +8,8 @@ export interface ElectronService {
   showOpenDialog: (options: any) => Promise<{ canceled: boolean; filePaths: string[] }>
   writeFile: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
   readFile: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>
+  readBlockLibrary: () => Promise<{ success: boolean; content?: string; error?: string }>
+  writeBlockLibrary: (content: string) => Promise<{ success: boolean; error?: string }>
 }
 
 const isElectronEnv = typeof window !== 'undefined' && 'api' in window
@@ -64,5 +66,21 @@ export const electronService: ElectronService = {
     }
     console.warn('readFile called outside Electron env.')
     return { success: false, error: 'Không hỗ trợ đọc file trực tiếp ngoài Electron.' }
+  },
+
+  readBlockLibrary: async () => {
+    if (isElectronEnv) {
+      return window.api.readBlockLibrary()
+    }
+    const content = window.localStorage.getItem('fairobot-block-library') || JSON.stringify({ modules: [], workflows: [] })
+    return { success: true, content }
+  },
+
+  writeBlockLibrary: async (content) => {
+    if (isElectronEnv) {
+      return window.api.writeBlockLibrary(content)
+    }
+    window.localStorage.setItem('fairobot-block-library', content)
+    return { success: true }
   }
 }

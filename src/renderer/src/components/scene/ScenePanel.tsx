@@ -1,11 +1,11 @@
 import React, { useRef } from 'react'
 import { useSceneStore } from '../../store/sceneStore'
 import { useRobotStore } from '../../store/robotStore'
-import { Trash2, Eye, EyeOff, Upload, Settings } from 'lucide-react'
+import { Trash2, Eye, EyeOff, Upload, Settings, Plus } from 'lucide-react'
 import { Transform3D } from '../../types/scene.types'
 import { translations } from '../../i18n/translations'
 
-export default function ScenePanel() {
+export default function ScenePanel({ compact = false }: { compact?: boolean }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const objects = useSceneStore((state) => state.objects)
   const addObject = useSceneStore((state) => state.addObject)
@@ -19,7 +19,7 @@ export default function ScenePanel() {
   const language = useRobotStore((state) => state.language)
   const t = (key: keyof typeof translations.vi) => translations[language][key]
 
-  const selectedObject = objects.find((o) => o.id === selectedObjectId)
+  const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? objects[0]
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -53,50 +53,54 @@ export default function ScenePanel() {
   }
 
   const handleTransformChange = (key: keyof Transform3D, val: number) => {
-    if (!selectedObjectId) return
-    updateObjectTransform(selectedObjectId, { [key]: val })
+    if (!selectedObject) return
+    updateObjectTransform(selectedObject.id, { [key]: val })
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 text-slate-200">
-      {/* Import Button / Dropzone */}
-      <div className="p-4 border-b border-[#2d2d34]">
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          accept=".gltf,.glb,.stl"
-          className="hidden"
-        />
-        <button
-          onClick={triggerFileInput}
-          className="w-full py-4 border border-dashed border-[#3a3a45] hover:border-blue-500 rounded-lg flex flex-col items-center justify-center gap-2 bg-[#121214] hover:bg-[#15151a] transition text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
-        >
-          <Upload size={20} className="text-blue-500" />
-          {t('upload3D')}
-          <span className="text-[10px] text-slate-500 font-normal">{t('supportFormats')}</span>
-        </button>
-      </div>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden text-slate-200">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept=".gltf,.glb,.stl"
+        className="hidden"
+      />
 
       {/* Objects List */}
-      <div className="p-4 flex-1 overflow-y-auto space-y-3 min-h-0">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
-          {t('deviceList')} ({objects.length})
-        </span>
+      <div className={`${compact ? 'h-[134px] shrink-0 p-2 space-y-1.5' : 'p-4 space-y-3 flex-1'} thin-scrollbar overflow-y-auto min-h-0`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+            {t('deviceList')} ({objects.length})
+          </span>
+          <button
+            onClick={triggerFileInput}
+            title={`${t('upload3D')} - ${t('supportFormats')}`}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[#2d2d34] bg-[#121214] text-blue-400 transition hover:border-blue-500 hover:bg-[#17171d] hover:text-blue-300 cursor-pointer"
+          >
+            {compact ? <Plus size={14} /> : <Upload size={14} />}
+          </button>
+        </div>
 
         {objects.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 text-xs">
+          <div className={`${compact ? 'py-5' : 'py-8'} text-center text-slate-500 text-xs`}>
             {t('noDevices')}
+            <button
+              onClick={triggerFileInput}
+              className="mx-auto mt-2 block text-[11px] font-semibold text-blue-400 transition hover:text-blue-300 cursor-pointer"
+            >
+              {t('upload3D')}
+            </button>
           </div>
         ) : (
           <div className="space-y-1.5">
             {objects.map((obj) => {
-              const isSelected = selectedObjectId === obj.id
+              const isSelected = selectedObject?.id === obj.id
               return (
                 <div
                   key={obj.id}
                   onClick={() => setSelectedObjectId(obj.id)}
-                  className={`p-2.5 rounded-lg border text-left cursor-pointer transition flex justify-between items-center ${
+                  className={`${compact ? 'p-2 rounded' : 'p-2.5 rounded-lg'} border text-left cursor-pointer transition flex justify-between items-center ${
                     isSelected
                       ? 'border-blue-500 bg-blue-950/10'
                       : 'border-[#2d2d34] bg-[#121214] hover:bg-[#18181d]'
@@ -134,9 +138,9 @@ export default function ScenePanel() {
 
       {/* Selected Object Transforms */}
       {selectedObject && (
-        <div className="p-4 border-t border-[#2d2d34] bg-[#141417] space-y-4 max-h-[400px] overflow-y-auto shrink-0">
+        <div className={`${compact ? 'h-[212px] shrink-0 overflow-hidden p-2 space-y-1.5' : 'p-4 space-y-4 max-h-[400px] thin-scrollbar overflow-y-auto'} border-t border-[#2d2d34] bg-[#141417]`}>
           <div className="flex justify-between items-center">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+            <span className={`${compact ? 'text-[11px]' : 'text-xs'} font-semibold text-slate-400 uppercase tracking-wider block`}>
               {t('transform')}
             </span>
             <span className="text-[10px] text-blue-400 font-bold truncate max-w-[150px]">
@@ -145,105 +149,117 @@ export default function ScenePanel() {
           </div>
 
           {/* Position (x, y, z) */}
-          <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">{t('position')}</span>
-            <div className="grid grid-cols-3 gap-2">
+          <div className={compact ? 'space-y-0.5' : 'space-y-2'}>
+            <span className={`${compact ? 'text-[10px] leading-none whitespace-nowrap' : 'text-[11px]'} font-bold text-slate-400 block`}>
+              {compact ? 'Vị trí (mm)' : t('position')}
+            </span>
+            <div className={`grid grid-cols-3 ${compact ? 'gap-1.5' : 'gap-2'}`}>
               <div>
                 <span className="text-[9px] text-red-400 block font-mono">X (mm)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.x}
                   onChange={(e) => handleTransformChange('x', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-emerald-400 block font-mono">Y (mm)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.y}
                   onChange={(e) => handleTransformChange('y', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-blue-400 block font-mono">Z (mm)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.z}
                   onChange={(e) => handleTransformChange('z', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
             </div>
           </div>
 
           {/* Rotation (rx, ry, rz) */}
-          <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">{t('rotation')}</span>
-            <div className="grid grid-cols-3 gap-2">
+          <div className={compact ? 'space-y-0.5' : 'space-y-2'}>
+            <span className={`${compact ? 'text-[10px] leading-none whitespace-nowrap' : 'text-[11px]'} font-bold text-slate-400 block`}>
+              {compact ? 'Góc xoay (°)' : t('rotation')}
+            </span>
+            <div className={`grid grid-cols-3 ${compact ? 'gap-1.5' : 'gap-2'}`}>
               <div>
                 <span className="text-[9px] text-red-300 block font-mono">Rx (°)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.rx}
                   onChange={(e) => handleTransformChange('rx', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-emerald-300 block font-mono">Ry (°)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.ry}
                   onChange={(e) => handleTransformChange('ry', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-blue-300 block font-mono">Rz (°)</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.rz}
                   onChange={(e) => handleTransformChange('rz', parseFloat(e.target.value) || 0)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
             </div>
           </div>
 
           {/* Scale (sx, sy, sz) */}
-          <div className="space-y-2">
-            <span className="text-[11px] font-bold text-slate-400 block">{t('scale')}</span>
-            <div className="grid grid-cols-3 gap-2">
+          <div className={compact ? 'space-y-0.5' : 'space-y-2'}>
+            <span className={`${compact ? 'text-[10px] leading-none whitespace-nowrap' : 'text-[11px]'} font-bold text-slate-400 block`}>
+              {compact ? 'Tỉ lệ' : t('scale')}
+            </span>
+            <div className={`grid grid-cols-3 ${compact ? 'gap-1.5' : 'gap-2'}`}>
               <div>
                 <span className="text-[9px] text-slate-500 block font-mono">Sx</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.sx}
-                  step="0.1"
                   onChange={(e) => handleTransformChange('sx', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-slate-500 block font-mono">Sy</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.sy}
-                  step="0.1"
                   onChange={(e) => handleTransformChange('sy', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
               <div>
                 <span className="text-[9px] text-slate-500 block font-mono">Sz</span>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={selectedObject.transform.sz}
-                  step="0.1"
                   onChange={(e) => handleTransformChange('sz', parseFloat(e.target.value) || 1)}
-                  className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded p-1 text-xs font-mono font-bold text-white text-center outline-none"
+                  className={`${compact ? 'h-7 p-0.5' : 'p-1'} w-full bg-[#1e1e24] border border-[#2d2d34] rounded text-xs font-mono font-bold text-white text-center outline-none`}
                 />
               </div>
             </div>
