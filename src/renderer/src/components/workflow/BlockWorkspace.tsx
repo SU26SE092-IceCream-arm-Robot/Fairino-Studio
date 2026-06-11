@@ -6,7 +6,7 @@ import { JointAngles, SimpleModuleTemplate, SimpleWorkflowTemplate, TCPPose, Wor
 import { electronService } from '../../services/electronService'
 
 type SimpleBlock =
-  | { kind: 'moveAB'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number }
+  | { kind: 'moveAB'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL' }
   | { kind: 'delay'; id: string; stepIds: string[]; seconds: number }
   | { kind: 'do'; id: string; stepIds: string[]; doType: 'cabinet' | 'tool'; doIndex: number; doValue: 0 | 1 }
   | { kind: 'unknown'; id: string; stepIds: string[]; step: WorkflowStep }
@@ -27,8 +27,8 @@ const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
     const next = steps[index + 1]
 
     if (
-      step.type === 'MoveL' &&
-      next?.type === 'MoveL' &&
+      (step.type === 'MoveL' || step.type === 'MoveJ') &&
+      (next?.type === 'MoveL' || next?.type === 'MoveJ') &&
       step.simpleBlockId &&
       step.simpleBlockId === next.simpleBlockId &&
       step.simpleBlockRole === 'moveA' &&
@@ -43,7 +43,8 @@ const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
         pointA: step.tcpPose,
         pointB: next.tcpPose,
         speed: step.speed || 30,
-        acc: step.acc || 30
+        acc: step.acc || 30,
+        motionType: step.type as 'MoveJ' | 'MoveL'
       })
       index += 2
       continue
@@ -90,6 +91,7 @@ export default function BlockWorkspace() {
   const language = useRobotStore((state) => state.language)
   const reorderSteps = useRobotStore((state) => state.reorderSteps)
   const setSelectedStepId = useRobotStore((state) => state.setSelectedStepId)
+  const setJointAngles = useRobotStore((state) => state.setJointAngles)
   const projectModules = useRobotStore((state) => state.projectModules)
   const projectWorkflowTemplates = useRobotStore((state) => state.projectWorkflowTemplates)
   const setProjectModules = useRobotStore((state) => state.setProjectModules)
@@ -133,6 +135,12 @@ export default function BlockWorkspace() {
 
   const selectBlock = (block: SimpleBlock) => {
     setSelectedStepId(block.stepIds[0] || null)
+    if (block.kind === 'moveAB') {
+      const firstStep = steps.find((s) => s.id === block.stepIds[0])
+      if (firstStep && firstStep.jointAngles) {
+        setJointAngles(firstStep.jointAngles)
+      }
+    }
   }
 
   const addMoveAB = (pointA: TCPPose = tcpPose, pointB: TCPPose = tcpPose) => {
@@ -141,9 +149,10 @@ export default function BlockWorkspace() {
       ...steps,
       {
         id: createId('step'),
-        type: 'MoveL',
+        type: 'MoveJ',
         label: 'Move A',
         tcpPose: clonePose(pointA),
+        jointAngles: [...jointAngles] as JointAngles,
         speed: 30,
         acc: 30,
         simpleBlockId: blockId,
@@ -151,9 +160,10 @@ export default function BlockWorkspace() {
       },
       {
         id: createId('step'),
-        type: 'MoveL',
+        type: 'MoveJ',
         label: 'Move B',
         tcpPose: clonePose(pointB),
+        jointAngles: [...jointAngles] as JointAngles,
         speed: 30,
         acc: 30,
         simpleBlockId: blockId,
@@ -218,9 +228,10 @@ export default function BlockWorkspace() {
         },
         {
           id: createId('step'),
-          type: 'MoveL',
+          type: 'MoveJ',
           label: 'Move B',
           tcpPose: target,
+          jointAngles: [...jointAngles] as JointAngles,
           speed: 30,
           acc: 30,
           simpleBlockId: returnId,
@@ -228,9 +239,10 @@ export default function BlockWorkspace() {
         },
         {
           id: createId('step'),
-          type: 'MoveL',
+          type: 'MoveJ',
           label: 'Move A',
           tcpPose: start,
+          jointAngles: [...jointAngles] as JointAngles,
           speed: 30,
           acc: 30,
           simpleBlockId: returnId,
@@ -508,18 +520,63 @@ export default function BlockWorkspace() {
                       ? `Right-click vào sàn hoặc vật thể trong viewport, rồi chọn Set A${moveNumber} hoặc Set B${moveNumber}.`
                       : `Viewport shows blue A${moveNumber}, purple B${moveNumber}, and the motion path between them.`}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
-                    <div className="rounded bg-black/25 border border-blue-400/20 px-2 py-1.5">A{moveNumber}: <span className="font-mono text-white">{formatPose(block.pointA)}</span></div>
-                    <div className="rounded bg-black/25 border border-violet-400/20 px-2 py-1.5">B{moveNumber}: <span className="font-mono text-white">{formatPose(block.pointB)}</span></div>
-                  </div>
                   <div className="grid grid-cols-2 gap-2">
+                    {/* Left-click coord button A to update joint state and select step A */}
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedStepId(block.stepIds[0])
+                        const stepA = steps.find((s) => s.id === block.stepIds[0])
+                        if (stepA?.jointAngles) setJointAngles(stepA.jointAngles)
+                      }}
+                      className="h-12 rounded bg-[#202027] hover:bg-blue-950/30 border border-blue-500/30 hover:border-blue-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                      title={language === 'vi' ? 'Di chuyển robot đến điểm A' : 'Move robot to point A'}
+                    >
+                      <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider block">Đến điểm A{moveNumber}</span>
+                      <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointA)}</span>
+                    </button>
+                    {/* Left-click coord button B to update joint state and select step B */}
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedStepId(block.stepIds[1])
+                        const stepB = steps.find((s) => s.id === block.stepIds[1])
+                        if (stepB?.jointAngles) setJointAngles(stepB.jointAngles)
+                      }}
+                      className="h-12 rounded bg-[#202027] hover:bg-violet-950/30 border border-violet-500/30 hover:border-violet-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                      title={language === 'vi' ? 'Di chuyển robot đến điểm B' : 'Move robot to point B'}
+                    >
+                      <span className="text-[9px] font-bold text-violet-400 uppercase tracking-wider block">Đến điểm B{moveNumber}</span>
+                      <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointB)}</span>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="text-[10px] text-slate-500">
+                      {language === 'vi' ? 'Kiểu chạy' : 'Motion'}
+                      <select
+                        value={block.motionType}
+                        onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({
+                          ...step,
+                          type: e.target.value as 'MoveJ' | 'MoveL',
+                          label: step.simpleBlockRole === 'moveA'
+                            ? (e.target.value === 'MoveJ' ? 'Move A' : 'Move A')
+                            : (e.target.value === 'MoveJ' ? 'Move B' : 'Move B')
+                        }))}
+                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                      >
+                        <option value="MoveJ">{language === 'vi' ? 'Đi vòng' : 'Joint'}</option>
+                        <option value="MoveL">{language === 'vi' ? 'Đi thẳng' : 'Linear'}</option>
+                      </select>
+                    </label>
                     <label className="text-[10px] text-slate-500">
                       Speed
-                      <input value={block.speed} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none" />
+                      <input value={block.speed} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none" />
                     </label>
                     <label className="text-[10px] text-slate-500">
                       Acc
-                      <input value={block.acc} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none" />
+                      <input value={block.acc} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none" />
                     </label>
                   </div>
                 </div>

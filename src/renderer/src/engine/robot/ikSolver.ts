@@ -68,7 +68,8 @@ export function solveIK(
   targetPos: THREE.Vector3, // Target position in meters (robot coordinate frame)
   targetQuat: THREE.Quaternion, // Target orientation (robot coordinate frame)
   currentAngles: JointAngles, // Current joint angles in degrees
-  robotObj: any // Three.js robot object loaded by urdf-loader
+  robotObj: any, // Three.js robot object loaded by urdf-loader
+  maxStepPerFrame: number = 8 // Maximum joint angle change in degrees (clamp)
 ): JointAngles | null {
   if (!robotObj) return null
 
@@ -256,7 +257,6 @@ export function solveIK(
   robotObj.updateMatrixWorld(true)
 
   // Limit joint angle change per frame (velocity clamp) to prevent sudden jumps or twists
-  const maxStepPerFrame = 8 // degrees
   const finalAngles = q.map((rad, idx) => {
     const deg = (rad * 180) / Math.PI
     const prevDeg = currentAngles[idx]

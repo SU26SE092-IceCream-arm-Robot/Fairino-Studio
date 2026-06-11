@@ -37,6 +37,7 @@ export default function Viewport3D() {
   const controlsRef = useRef<OrbitControls | null>(null)
   const transformControlsRef = useRef<any>(null)
   const dummyTargetRef = useRef<THREE.Object3D | null>(null)
+  const tcpVisualRef = useRef<THREE.Object3D | null>(null)
   const boxHelperRef = useRef<THREE.BoxHelper | null>(null)
   const measureLineRef = useRef<THREE.Line | null>(null)
   const selfMeasureLineRef = useRef<THREE.Line | null>(null)
@@ -50,6 +51,7 @@ export default function Viewport3D() {
     x: number
     y: number
     pose: { x: number; y: number; z: number; rx: number; ry: number; rz: number }
+    isTCPClick?: boolean
   } | null>(null)
   const [simulationMessage, setSimulationMessage] = useState<{
     tone: 'warning' | 'danger'
@@ -75,6 +77,7 @@ export default function Viewport3D() {
   const setCurrentStepIndex = useRobotStore((state) => state.setCurrentStepIndex)
   const setSelectedStepId = useRobotStore((state) => state.setSelectedStepId)
   const setIKMode = useRobotStore((state) => state.setIKMode)
+  const language = useRobotStore((state) => state.language)
 
   const objects = useSceneStore((state) => state.objects)
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
@@ -121,7 +124,7 @@ export default function Viewport3D() {
   }
 
   // Helper to compute Inverse Kinematics (IK)
-  const computeIK = (tcp: any, currentAngles: number[], robot: any): number[] | null => {
+  const computeIK = (tcp: any, currentAngles: number[], robot: any, maxStep: number = 8): number[] | null => {
     const targetPos = new THREE.Vector3(tcp.x / 1000, tcp.y / 1000, tcp.z / 1000)
     const euler = new THREE.Euler(
       (tcp.rx * Math.PI) / 180,
@@ -130,19 +133,34 @@ export default function Viewport3D() {
       'XYZ'
     )
     const targetQuat = new THREE.Quaternion().setFromEuler(euler)
-    return solveIK(targetPos, targetQuat, currentAngles as any, robot)
+    return solveIK(targetPos, targetQuat, currentAngles as any, robot, maxStep)
   }
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-  const interpolatePose = (from: TCPPose, to: TCPPose, t: number): TCPPose => ({
-    x: from.x + (to.x - from.x) * t,
-    y: from.y + (to.y - from.y) * t,
-    z: from.z + (to.z - from.z) * t,
-    rx: from.rx + (to.rx - from.rx) * t,
-    ry: from.ry + (to.ry - from.ry) * t,
-    rz: from.rz + (to.rz - from.rz) * t
-  })
+  const interpolatePose = (from: TCPPose, to: TCPPose, t: number): TCPPose => {
+    const x = from.x + (to.x - from.x) * t
+    const y = from.y + (to.y - from.y) * t
+    const z = from.z + (to.z - from.z) * t
+
+    const qFrom = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler((from.rx * Math.PI) / 180, (from.ry * Math.PI) / 180, (from.rz * Math.PI) / 180, 'XYZ')
+    )
+    const qTo = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler((to.rx * Math.PI) / 180, (to.ry * Math.PI) / 180, (to.rz * Math.PI) / 180, 'XYZ')
+    )
+    const qResult = qFrom.clone().slerp(qTo, t)
+    const eulerResult = new THREE.Euler().setFromQuaternion(qResult, 'XYZ')
+
+    return {
+      x,
+      y,
+      z,
+      rx: (eulerResult.x * 180) / Math.PI,
+      ry: (eulerResult.y * 180) / Math.PI,
+      rz: (eulerResult.z * 180) / Math.PI
+    }
+  }
 
   const applyRobotAngles = (robot: any, angles: JointAngles) => {
     const jointNames = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
@@ -313,14 +331,27 @@ export default function Viewport3D() {
     if (baseLink) {
       localPoint.applyMatrix4(new THREE.Matrix4().copy(baseLink.matrixWorld).invert())
     }
-    const currentTcp = useRobotStore.getState().tcpPose
+    
+    // Nâng cao điểm đặt lên 80mm so với mặt sàn để tránh đâm trực tiếp gây va chạm
+    const targetZ = localPoint.z * 1000 + 80
+
+    // Chuẩn hóa hướng xoay từ tư thế Home tiêu chuẩn [0, -30, 90, 0, 60, 0]
+    const homeAngles: JointAngles = [0, -30, 90, 0, 60, 0]
+    let rx = 180, ry = 0, rz = 0
+    if (robotRef.current) {
+      const homePose = computeFK(homeAngles, robotRef.current)
+      rx = homePose.rx
+      ry = homePose.ry
+      rz = homePose.rz
+    }
+
     return {
       x: Math.round(localPoint.x * 1000 * 10) / 10,
       y: Math.round(localPoint.y * 1000 * 10) / 10,
-      z: Math.round(localPoint.z * 1000 * 10) / 10,
-      rx: currentTcp.rx,
-      ry: currentTcp.ry,
-      rz: currentTcp.rz
+      z: Math.round(targetZ * 10) / 10,
+      rx,
+      ry,
+      rz
     }
   }
 
@@ -398,7 +429,7 @@ export default function Viewport3D() {
       } else if (step.type === 'MoveL') {
         if (step.tcpPose) {
           nextTCP = { ...step.tcpPose }
-          const solved = computeIK(nextTCP, tempJoints, robot)
+          const solved = computeIK(nextTCP, step.jointAngles || tempJoints, robot, 180)
           if (solved) {
             nextJoints = solved
             if (!step.jointAngles || step.jointAngles.some((val, i) => Math.abs(val - solved[i]) > 0.1)) {
@@ -518,7 +549,7 @@ export default function Viewport3D() {
         if (cancelled || !useRobotStore.getState().isPlaying) return
         const t = frame / frameCount
         const pose = interpolatePose(startPose, targetPose, t)
-        const solved = computeIK(pose, seedAngles, robot)
+        const solved = computeIK(pose, seedAngles, robot, 25)
         if (solved) {
           seedAngles = solved as JointAngles
           const actualPose = computeFK(seedAngles, robot)
@@ -621,8 +652,8 @@ export default function Viewport3D() {
       const stepA = steps[index]
       const stepB = steps[index + 1]
       if (
-        stepA.type !== 'MoveL' ||
-        stepB.type !== 'MoveL' ||
+        (stepA.type !== 'MoveL' && stepA.type !== 'MoveJ') ||
+        (stepB.type !== 'MoveL' && stepB.type !== 'MoveJ') ||
         !stepA.tcpPose ||
         !stepB.tcpPose ||
         !stepA.simpleBlockId ||
@@ -777,6 +808,30 @@ export default function Viewport3D() {
     dummyTarget.visible = false
     scene.add(dummyTarget)
     dummyTargetRef.current = dummyTarget
+
+    // Create red TCP indicator for visualization and direct click assignment
+    const tcpVisualGeom = new THREE.SphereGeometry(0.012, 16, 16)
+    const tcpVisualMat = new THREE.MeshBasicMaterial({
+      color: 0xf43f5e,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: false
+    })
+    const tcpVisualMesh = new THREE.Mesh(tcpVisualGeom, tcpVisualMat)
+    tcpVisualMesh.name = 'tcp_red_indicator'
+
+    const tcpGlowGeom = new THREE.SphereGeometry(0.02, 8, 8)
+    const tcpGlowMat = new THREE.MeshBasicMaterial({
+      color: 0xf43f5e,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.3,
+      depthTest: false
+    })
+    const tcpGlowMesh = new THREE.Mesh(tcpGlowGeom, tcpGlowMat)
+    tcpVisualMesh.add(tcpGlowMesh)
+    scene.add(tcpVisualMesh)
+    tcpVisualRef.current = tcpVisualMesh
 
     // Measurement Line
     const lineGeom = new THREE.BufferGeometry()
@@ -985,7 +1040,10 @@ export default function Viewport3D() {
         robotRef.current = robot
         setIsRobotLoaded(true)
 
-        updateRobotJoints(useRobotStore.getState().jointAngles)
+        robot.updateMatrixWorld(true)
+        setTimeout(() => {
+          updateRobotJoints(useRobotStore.getState().jointAngles)
+        }, 50)
       },
       undefined,
       (error) => {
@@ -1007,7 +1065,8 @@ export default function Viewport3D() {
       const candidates: THREE.Object3D[] = [
         ...Array.from(loadedObjectsRef.current.values())
       ]
-      if (robotRef.current) candidates.push(robotRef.current)
+      // Do not raycast against the robot itself to prevent invalid points on robot body
+      // if (robotRef.current) candidates.push(robotRef.current)
 
       const hits = raycaster.intersectObjects(candidates, true)
       if (hits.length > 0) return hits[0].point
@@ -1039,7 +1098,6 @@ export default function Viewport3D() {
       if (
         event.button !== 0 ||
         transformControls.dragging ||
-        useRobotStore.getState().isIKMode ||
         useRobotStore.getState().isPlaying
       ) {
         return
@@ -1050,6 +1108,25 @@ export default function Viewport3D() {
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
       raycaster.setFromCamera(mouse, camera)
+
+      // 1. Raycast TCP red indicator first for quick pose assignment
+      if (tcpVisualRef.current) {
+        const tcpIntersects = raycaster.intersectObject(tcpVisualRef.current, true)
+        if (tcpIntersects.length > 0) {
+          const currentTcp = useRobotStore.getState().tcpPose
+          setPointContextMenu({
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+            pose: { ...currentTcp },
+            isTCPClick: true
+          })
+          return
+        }
+      }
+
+      if (useRobotStore.getState().isIKMode) {
+        return
+      }
 
       // 1. Raycast imported auxiliary objects first
       const loadedMeshes = Array.from(loadedObjectsRef.current.values())
@@ -1480,6 +1557,27 @@ export default function Viewport3D() {
       updateMeasurementAndHitboxes()
       updateSimpleWaypointScreenLabels()
 
+      // Pulse animation and position update for TCP red dot indicator
+      if (tcpVisualRef.current && robotRef.current) {
+        const wristLink = robotRef.current.links?.['wrist3_link']
+        if (wristLink) {
+          const wristWorldPos = new THREE.Vector3()
+          wristLink.getWorldPosition(wristWorldPos)
+          tcpVisualRef.current.position.copy(wristWorldPos)
+          tcpVisualRef.current.updateMatrixWorld(true)
+        }
+
+        const time = performance.now() * 0.005
+        const mainMesh = tcpVisualRef.current as THREE.Mesh
+        if (mainMesh.material) {
+          (mainMesh.material as THREE.MeshBasicMaterial).opacity = 0.5 + Math.sin(time * 2.0) * 0.3
+        }
+        const glowMesh = tcpVisualRef.current.children[0] as THREE.Mesh
+        if (glowMesh && glowMesh.material) {
+          (glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.15 + Math.sin(time * 2.0) * 0.1
+        }
+      }
+
       renderer.render(scene, camera)
     }
     animate()
@@ -1903,15 +2001,20 @@ export default function Viewport3D() {
 
       setTCPPose({ x, y, z, rx, ry, rz })
 
-      if (dummyTarget && !transformControlsRef.current?.dragging) {
-        const wristWorldPos = new THREE.Vector3()
-        const wristWorldQuat = new THREE.Quaternion()
-        wristLink.getWorldPosition(wristWorldPos)
-        wristLink.getWorldQuaternion(wristWorldQuat)
+      const wristWorldPos = new THREE.Vector3()
+      const wristWorldQuat = new THREE.Quaternion()
+      wristLink.getWorldPosition(wristWorldPos)
+      wristLink.getWorldQuaternion(wristWorldQuat)
 
+      if (dummyTarget && !transformControlsRef.current?.dragging) {
         dummyTarget.position.copy(wristWorldPos)
         dummyTarget.quaternion.copy(wristWorldQuat)
         dummyTarget.updateMatrixWorld(true)
+      }
+
+      if (tcpVisualRef.current) {
+        tcpVisualRef.current.position.copy(wristWorldPos)
+        tcpVisualRef.current.updateMatrixWorld(true)
       }
     }
   }
@@ -1922,8 +2025,8 @@ export default function Viewport3D() {
       const stepA = steps[index]
       const stepB = steps[index + 1]
       if (
-        stepA.type === 'MoveL' &&
-        stepB?.type === 'MoveL' &&
+        (stepA.type === 'MoveL' || stepA.type === 'MoveJ') &&
+        (stepB?.type === 'MoveL' || stepB?.type === 'MoveJ') &&
         stepA.simpleBlockId &&
         stepA.simpleBlockId === stepB.simpleBlockId &&
         stepA.simpleBlockRole === 'moveA' &&
@@ -1942,28 +2045,46 @@ export default function Viewport3D() {
     const pose = pointContextMenu.pose
     const currentSteps = useRobotStore.getState().steps
     const currentAngles = useRobotStore.getState().jointAngles
-    const solved = solveReachablePose(pose, currentAngles)
-    if (!solved.ok) {
-      showSimulationMessage(
-        'warning',
-        'Không thể đặt điểm',
-        solved.reason
-      )
-      setPointContextMenu(null)
-      return
-    }
 
-    useRobotStore.getState().reorderSteps(
-      currentSteps.map((step) => (
-        step.id === stepId
-          ? {
-              ...step,
-              tcpPose: pose,
-              jointAngles: solved.angles
-            }
-          : step
-      ))
-    )
+    if (pointContextMenu.isTCPClick) {
+      // Gán trực tiếp TCP và góc khớp hiện tại, đảm bảo sai số là 0mm
+      useRobotStore.getState().reorderSteps(
+        currentSteps.map((step) => (
+          step.id === stepId
+            ? {
+                ...step,
+                tcpPose: { ...pose },
+                jointAngles: [...currentAngles] as JointAngles
+              }
+            : step
+        ))
+      )
+    } else {
+      // Đặt điểm qua chuột phải: dùng tư thế Home tiêu chuẩn làm seed angles khi giải IK để tránh xoắn khớp
+      const homeAngles: JointAngles = [0, -30, 90, 0, 60, 0]
+      const solved = solveReachablePose(pose, homeAngles)
+      if (!solved.ok) {
+        showSimulationMessage(
+          'warning',
+          'Không thể đặt điểm',
+          solved.reason
+        )
+        setPointContextMenu(null)
+        return
+      }
+
+      useRobotStore.getState().reorderSteps(
+        currentSteps.map((step) => (
+          step.id === stepId
+            ? {
+                ...step,
+                tcpPose: pose,
+                jointAngles: solved.angles
+              }
+            : step
+        ))
+      )
+    }
     setPointContextMenu(null)
   }
 
@@ -1979,6 +2100,16 @@ export default function Viewport3D() {
       : -1
     if (selectedIndex >= 0) {
       setCurrentStepIndex(selectedIndex)
+      const startStep = currentSteps[selectedIndex]
+      if (startStep && startStep.jointAngles) {
+        setJointAngles(startStep.jointAngles)
+      }
+    } else {
+      setCurrentStepIndex(0)
+      const startStep = currentSteps[0]
+      if (startStep && startStep.jointAngles) {
+        setJointAngles(startStep.jointAngles)
+      }
     }
     setPlaying(true)
   }
@@ -2046,14 +2177,20 @@ export default function Viewport3D() {
           }}
         >
           <div className="px-3 py-2 border-b border-white/10">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Đặt điểm tại vị trí này</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">
+              {pointContextMenu.isTCPClick 
+                ? (language === 'vi' ? 'Gán TCP hiện tại cho' : 'Assign current TCP to')
+                : (language === 'vi' ? 'Đặt điểm tại vị trí này' : 'Set point at this location')}
+            </div>
             <div className="text-[10px] text-slate-500 font-mono mt-0.5">
               {Math.round(pointContextMenu.pose.x)}, {Math.round(pointContextMenu.pose.y)}, {Math.round(pointContextMenu.pose.z)}
             </div>
           </div>
           {simpleMoveTargets.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-slate-400">
-              Thêm block Move A→B trước, rồi chuột phải để set A/B.
+              {language === 'vi' 
+                ? 'Thêm block Move A→B trước để gán điểm.' 
+                : 'Add a Move A→B block first to assign points.'}
             </div>
           ) : (
             <div className="p-1.5 grid grid-cols-2 gap-1.5">
