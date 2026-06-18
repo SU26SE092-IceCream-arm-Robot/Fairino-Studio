@@ -36,6 +36,7 @@ interface RobotState {
   language: 'vi' | 'en'
   lengthUnit: 'mm' | 'cm' | 'm'
   angleUnit: 'deg' | 'rad'
+  solveIKCallback: ((pose: TCPPose, seed: JointAngles) => JointAngles | null) | null
   
   // Actions
   setJointAngles: (angles: JointAngles) => void
@@ -67,6 +68,7 @@ interface RobotState {
   setCurrentStepIndex: (index: number) => void
   resetSimulation: () => void
   setSelectedJointName: (name: string | null) => void
+  registerIKSolver: (callback: ((pose: TCPPose, seed: JointAngles) => JointAngles | null) | null) => void
 }
 
 export const useRobotStore = create<RobotState>((set) => ({
@@ -94,6 +96,7 @@ export const useRobotStore = create<RobotState>((set) => ({
   language: 'vi',
   lengthUnit: 'mm',
   angleUnit: 'deg',
+  solveIKCallback: null,
   
   setJointAngles: (angles) => set({ jointAngles: angles }),
   setTCPPose: (pose) => set({ tcpPose: pose }),
@@ -156,5 +159,6 @@ export const useRobotStore = create<RobotState>((set) => ({
   setCurrentStepIndex: (index) => set({ currentStepIndex: index }),
   
   resetSimulation: () => set({ currentStepIndex: 0, isPlaying: false }),
-  setSelectedJointName: (name) => set({ selectedJointName: name })
+  setSelectedJointName: (name) => set({ selectedJointName: name }),
+  registerIKSolver: (callback) => set({ solveIKCallback: callback })
 }))

@@ -12,6 +12,7 @@ interface SceneState {
   removeObject: (id: string) => void
   updateObjectTransform: (id: string, transform: Partial<Transform3D>) => void
   updateObjectVisibility: (id: string, visible: boolean) => void
+  updateObjectBaseSize: (id: string, baseSize: { x: number; y: number; z: number }) => void
   setSelectedObjectId: (id: string | null) => void
   setCollisionWarning: (warning: boolean) => void
   setDebugHitbox: (debug: boolean) => void
@@ -66,6 +67,11 @@ export const useSceneStore = create<SceneState>((set) => ({
   updateObjectVisibility: (id, visible) =>
     set((state) => ({
       objects: state.objects.map((o) => (o.id === id ? { ...o, visible } : o))
+    })),
+
+  updateObjectBaseSize: (id, baseSize) =>
+    set((state) => ({
+      objects: state.objects.map((o) => (o.id === id ? { ...o, baseSize } : o))
     })),
 
   setSelectedObjectId: (id) => set({ selectedObjectId: id }),

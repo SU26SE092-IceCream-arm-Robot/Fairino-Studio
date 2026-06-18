@@ -47,7 +47,9 @@ export interface WorkflowStep {
   // Metadata
   comment?: string;
   simpleBlockId?: string;
-  simpleBlockRole?: 'moveA' | 'moveB';
+  simpleBlockRole?: 'moveA' | 'moveB' | 'loopA' | 'loopB';
+  loopType?: 'cycles' | 'seconds';
+  loopValue?: number;
 }
 
 export type SimpleLibraryScope = 'project' | 'app' | 'builtin';

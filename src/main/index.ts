@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import icon from '../../resources/icon.png?asset'
 import fs from 'fs/promises'
 import { setupMenu } from './menu'
+import { autoUpdater } from 'electron-updater'
 
 const cacheDir = join(tmpdir(), 'fairobot-studio-electron-cache')
 app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
@@ -133,6 +134,82 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
     } catch (error: any) {
       return { success: false, error: error.message }
     }
+  })
+
+  // Configure Auto Updater
+  autoUpdater.autoDownload = false
+
+  ipcMain.on('check-for-updates', () => {
+    if (!app.isPackaged) {
+      // Dev mode update mock
+      setTimeout(() => {
+        mainWindow?.webContents.send('update-available', {
+          version: '1.0.1',
+          releaseNotes: 'Bản cập nhật giả lập để thử nghiệm giao diện trong môi trường phát triển (Dev Mode).'
+        })
+      }, 1000)
+      return
+    }
+    autoUpdater.checkForUpdates().catch((err) => {
+      mainWindow?.webContents.send('update-error', err.message || err)
+    })
+  })
+
+  ipcMain.on('download-update', () => {
+    if (!app.isPackaged) {
+      // Dev mode download mock
+      let percent = 0
+      const interval = setInterval(() => {
+        percent += 10
+        mainWindow?.webContents.send('download-progress', {
+          percent,
+          bytesPerSecond: 1024 * 1024,
+          transferred: percent * 10000,
+          total: 1000000
+        })
+        if (percent >= 100) {
+          clearInterval(interval)
+          mainWindow?.webContents.send('update-downloaded')
+        }
+      }, 300)
+      return
+    }
+    autoUpdater.downloadUpdate().catch((err) => {
+      mainWindow?.webContents.send('update-error', err.message || err)
+    })
+  })
+
+  ipcMain.on('quit-and-install', () => {
+    if (!app.isPackaged) {
+      dialog.showMessageBoxSync({
+        type: 'info',
+        title: 'Dev Mode Update',
+        message: 'Giả lập: Thoát và cài đặt bản cập nhật mới.'
+      })
+      app.quit()
+      return
+    }
+    autoUpdater.quitAndInstall()
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update-available', info)
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    mainWindow?.webContents.send('update-not-available')
+  })
+
+  autoUpdater.on('error', (err) => {
+    mainWindow?.webContents.send('update-error', err.message || err)
+  })
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    mainWindow?.webContents.send('download-progress', progressObj)
+  })
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow?.webContents.send('update-downloaded')
   })
 
   createWindow()

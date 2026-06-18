@@ -15,6 +15,44 @@ const api = {
     return () => {
       ipcRenderer.removeListener('menu-action', listener)
     }
+  },
+  checkForUpdates: () => ipcRenderer.send('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.send('download-update'),
+  quitAndInstall: () => ipcRenderer.send('quit-and-install'),
+  onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => {
+    const listener = (_event: any, info: any) => callback(info)
+    ipcRenderer.on('update-available', listener)
+    return () => {
+      ipcRenderer.removeListener('update-available', listener)
+    }
+  },
+  onUpdateNotAvailable: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('update-not-available', listener)
+    return () => {
+      ipcRenderer.removeListener('update-not-available', listener)
+    }
+  },
+  onDownloadProgress: (callback: (progress: { percent: number; bytesPerSecond?: number }) => void) => {
+    const listener = (_event: any, progress: any) => callback(progress)
+    ipcRenderer.on('download-progress', listener)
+    return () => {
+      ipcRenderer.removeListener('download-progress', listener)
+    }
+  },
+  onUpdateDownloaded: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('update-downloaded', listener)
+    return () => {
+      ipcRenderer.removeListener('update-downloaded', listener)
+    }
+  },
+  onUpdateError: (callback: (err: string) => void) => {
+    const listener = (_event: any, err: any) => callback(err)
+    ipcRenderer.on('update-error', listener)
+    return () => {
+      ipcRenderer.removeListener('update-error', listener)
+    }
   }
 }
 

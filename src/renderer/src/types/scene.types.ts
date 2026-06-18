@@ -18,4 +18,5 @@ export interface SceneObject {
   url: string;       // ObjectURL for active rendering
   transform: Transform3D;
   visible: boolean;
+  baseSize?: { x: number; y: number; z: number };
 }

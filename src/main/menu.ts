@@ -93,6 +93,13 @@ export function setupMenu(mainWindow: BrowserWindow): void {
           }
         },
         {
+          label: 'Kiểm tra Cập nhật...',
+          click: () => {
+            mainWindow.webContents.send('menu-action', 'check-for-updates')
+          }
+        },
+        { type: 'separator' },
+        {
           label: 'Về FaiRobot Studio',
           click: () => {
             dialog.showMessageBox(mainWindow, {

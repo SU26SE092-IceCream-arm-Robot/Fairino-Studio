@@ -15,8 +15,19 @@ import { JointAngles, TCPPose, WorkflowStep } from '../../types/robot.types'
 interface SimpleWaypointScreenLabel {
   id: string
   label: string
-  color: 'cyan' | 'violet'
+  color: 'cyan' | 'violet' | 'emerald' | 'amber'
   position: THREE.Vector3
+}
+
+const getLetterLabel = (num: number): string => {
+  let label = ''
+  let temp = num
+  while (temp > 0) {
+    const remainder = (temp - 1) % 26
+    label = String.fromCharCode(65 + remainder) + label
+    temp = Math.floor((temp - 1) / 26)
+  }
+  return label
 }
 
 const SELF_COLLISION_PAIRS = [
@@ -78,6 +89,7 @@ export default function Viewport3D() {
   const setSelectedStepId = useRobotStore((state) => state.setSelectedStepId)
   const setIKMode = useRobotStore((state) => state.setIKMode)
   const language = useRobotStore((state) => state.language)
+  const registerIKSolver = useRobotStore((state) => state.registerIKSolver)
 
   const objects = useSceneStore((state) => state.objects)
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
@@ -85,6 +97,7 @@ export default function Viewport3D() {
   const setCollisionWarning = useSceneStore((state) => state.setCollisionWarning)
   const isDebugHitbox = useSceneStore((state) => state.isDebugHitbox)
   const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
+  const updateObjectBaseSize = useSceneStore((state) => state.updateObjectBaseSize)
 
   // Helper to compute Forward Kinematics (FK)
   const computeFK = (angles: number[], robot: any) => {
@@ -135,6 +148,15 @@ export default function Viewport3D() {
     const targetQuat = new THREE.Quaternion().setFromEuler(euler)
     return solveIK(targetPos, targetQuat, currentAngles as any, robot, maxStep)
   }
+
+  useEffect(() => {
+    registerIKSolver((pose: TCPPose, seed: JointAngles) => {
+      const robot = robotRef.current
+      if (!robot) return null
+      return computeIK(pose, seed, robot, 180) as JointAngles | null
+    })
+    return () => registerIKSolver(null)
+  }, [registerIKSolver])
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -597,6 +619,61 @@ export default function Viewport3D() {
         const step = useRobotStore.getState().steps[index]
         if (!step) break
 
+        const nextStep = useRobotStore.getState().steps[index + 1]
+        if (step.simpleBlockRole === 'loopA' && nextStep && nextStep.simpleBlockRole === 'loopB') {
+          const loopType = step.loopType || 'cycles'
+          const loopValue = step.loopValue || 1
+          const speed = Math.max(0.1, useRobotStore.getState().playbackSpeed)
+          const duration = 1000 / speed
+
+          if (loopType === 'cycles') {
+            for (let cycle = 0; cycle < loopValue; cycle++) {
+              if (cancelled || !useRobotStore.getState().isPlaying) break
+              
+              // 1. Đi từ A -> B
+              setSelectedStepId(nextStep.id)
+              if (nextStep.type === 'MoveL' && nextStep.tcpPose) {
+                await animateCartesian(nextStep.tcpPose, duration)
+              } else if (nextStep.jointAngles) {
+                await animateJoints(nextStep.jointAngles, duration)
+              }
+              
+              if (cancelled || !useRobotStore.getState().isPlaying) break
+              
+              // 2. Đi từ B -> A
+              setSelectedStepId(step.id)
+              if (step.type === 'MoveL' && step.tcpPose) {
+                await animateCartesian(step.tcpPose, duration)
+              } else if (step.jointAngles) {
+                await animateJoints(step.jointAngles, duration)
+              }
+            }
+          } else if (loopType === 'seconds') {
+            const startTime = Date.now()
+            const limitMs = loopValue * 1000
+            let toB = true
+            
+            while (Date.now() - startTime < limitMs) {
+              if (cancelled || !useRobotStore.getState().isPlaying) break
+              
+              const targetStep = toB ? nextStep : step
+              setSelectedStepId(targetStep.id)
+              
+              if (targetStep.type === 'MoveL' && targetStep.tcpPose) {
+                await animateCartesian(targetStep.tcpPose, duration)
+              } else if (targetStep.jointAngles) {
+                await animateJoints(targetStep.jointAngles, duration)
+              }
+              
+              toB = !toB
+            }
+          }
+          
+          index += 2
+          setCurrentStepIndex(index)
+          continue
+        }
+
         if (getCollisionState(robot)) {
           setCollisionWarning(true)
           setPlaying(false)
@@ -646,11 +723,14 @@ export default function Viewport3D() {
     markerRoot.children.forEach(disposeObjectTree)
     markerRoot.clear()
 
-    let routeIndex = 1
+    let motionBlockIndex = 1
     const nextScreenLabels: SimpleWaypointScreenLabel[] = []
     for (let index = 0; index < steps.length - 1; index++) {
       const stepA = steps[index]
       const stepB = steps[index + 1]
+      const isMove = stepA.simpleBlockRole === 'moveA' && stepB?.simpleBlockRole === 'moveB'
+      const isLoop = stepA.simpleBlockRole === 'loopA' && stepB?.simpleBlockRole === 'loopB'
+
       if (
         (stepA.type !== 'MoveL' && stepA.type !== 'MoveJ') ||
         (stepB.type !== 'MoveL' && stepB.type !== 'MoveJ') ||
@@ -658,26 +738,33 @@ export default function Viewport3D() {
         !stepB.tcpPose ||
         !stepA.simpleBlockId ||
         stepA.simpleBlockId !== stepB.simpleBlockId ||
-        stepA.simpleBlockRole !== 'moveA' ||
-        stepB.simpleBlockRole !== 'moveB'
+        !(isMove || isLoop)
       ) {
         continue
       }
 
       const posA = poseToVector(stepA.tcpPose)
       const posB = poseToVector(stepB.tcpPose)
-      markerRoot.add(createWaypointMarker(posA, 0x38bdf8))
-      markerRoot.add(createWaypointMarker(posB, 0xa78bfa))
+
+      const colorA = isMove ? 0x38bdf8 : 0x10b981 // Cyan for move, Emerald for loop
+      const colorB = isMove ? 0xa78bfa : 0xf59e0b // Violet for move, Amber for loop
+
+      markerRoot.add(createWaypointMarker(posA, colorA))
+      markerRoot.add(createWaypointMarker(posB, colorB))
+
+      const labelA = getLetterLabel(motionBlockIndex)
+      const labelB = getLetterLabel(motionBlockIndex + 1)
+
       nextScreenLabels.push({
         id: `${stepA.id}-screen-label`,
-        label: `A${routeIndex}`,
-        color: 'cyan',
+        label: labelA,
+        color: isMove ? 'cyan' : 'emerald',
         position: posA.clone()
       })
       nextScreenLabels.push({
         id: `${stepB.id}-screen-label`,
-        label: `B${routeIndex}`,
-        color: 'violet',
+        label: labelB,
+        color: isMove ? 'violet' : 'amber',
         position: posB.clone()
       })
 
@@ -685,7 +772,7 @@ export default function Viewport3D() {
       const pathLine = new THREE.Line(
         pathGeom,
         new THREE.LineDashedMaterial({
-          color: 0x60a5fa,
+          color: isMove ? 0x60a5fa : 0x10b981,
           dashSize: 0.05,
           gapSize: 0.025,
           transparent: true,
@@ -701,12 +788,12 @@ export default function Viewport3D() {
       const length = direction.length()
       if (length > 0.001) {
         direction.normalize()
-        const arrow = new THREE.ArrowHelper(direction, posA, length, 0x60a5fa, 0.09, 0.045)
+        const arrow = new THREE.ArrowHelper(direction, posA, length, isMove ? 0x60a5fa : 0x10b981, 0.09, 0.045)
         arrow.renderOrder = 18
         markerRoot.add(arrow)
       }
 
-      routeIndex++
+      motionBlockIndex++
       index++
     }
 
@@ -1709,6 +1796,16 @@ export default function Viewport3D() {
         if (obj.fileType === 'stl') {
           const stlLoader = new STLLoader()
           stlLoader.load(obj.url, (geometry) => {
+            geometry.computeBoundingBox()
+            const sizeVec = new THREE.Vector3()
+            geometry.boundingBox?.getSize(sizeVec)
+            const baseSize = {
+              x: sizeVec.x * 1000,
+              y: sizeVec.y * 1000,
+              z: sizeVec.z * 1000
+            }
+            updateObjectBaseSize(obj.id, baseSize)
+
             const material = new THREE.MeshStandardMaterial({
               color: 0x90caf9,
               roughness: 0.5,
@@ -1730,6 +1827,17 @@ export default function Viewport3D() {
           const gltfLoader = new GLTFLoader()
           gltfLoader.load(obj.url, (gltf) => {
             const model = gltf.scene
+            
+            const box = new THREE.Box3().setFromObject(model)
+            const sizeVec = new THREE.Vector3()
+            box.getSize(sizeVec)
+            const baseSize = {
+              x: sizeVec.x * 1000,
+              y: sizeVec.y * 1000,
+              z: sizeVec.z * 1000
+            }
+            updateObjectBaseSize(obj.id, baseSize)
+
             model.traverse((child: any) => {
               if (child.isMesh) {
                 child.castShadow = true
@@ -2020,20 +2128,28 @@ export default function Viewport3D() {
   }
 
   const simpleMoveTargets = (() => {
-    const targets: Array<{ label: string; aStepId: string; bStepId: string }> = []
+    const targets: Array<{ label: string; aStepId: string; bStepId: string; moveIndex: number; isLoop: boolean }> = []
+    let motionBlockIndex = 0
     for (let index = 0; index < steps.length - 1; index++) {
       const stepA = steps[index]
       const stepB = steps[index + 1]
+      const isMove = stepA.simpleBlockRole === 'moveA' && stepB?.simpleBlockRole === 'moveB'
+      const isLoop = stepA.simpleBlockRole === 'loopA' && stepB?.simpleBlockRole === 'loopB'
       if (
         (stepA.type === 'MoveL' || stepA.type === 'MoveJ') &&
         (stepB?.type === 'MoveL' || stepB?.type === 'MoveJ') &&
         stepA.simpleBlockId &&
         stepA.simpleBlockId === stepB.simpleBlockId &&
-        stepA.simpleBlockRole === 'moveA' &&
-        stepB.simpleBlockRole === 'moveB'
+        (isMove || isLoop)
       ) {
-        const moveNumber = targets.length + 1
-        targets.push({ label: `${moveNumber}`, aStepId: stepA.id, bStepId: stepB.id })
+        motionBlockIndex++
+        targets.push({
+          label: `${getLetterLabel(motionBlockIndex)} → ${getLetterLabel(motionBlockIndex + 1)}`,
+          aStepId: stepA.id,
+          bStepId: stepB.id,
+          moveIndex: motionBlockIndex,
+          isLoop: isLoop
+        })
         index++
       }
     }
@@ -2189,26 +2305,26 @@ export default function Viewport3D() {
           {simpleMoveTargets.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-slate-400">
               {language === 'vi' 
-                ? 'Thêm block Move A→B trước để gán điểm.' 
-                : 'Add a Move A→B block first to assign points.'}
+                ? 'Thêm block di chuyển hoặc Loop trước để gán điểm.' 
+                : 'Add a Move or Loop block first to assign points.'}
             </div>
           ) : (
             <div className="p-1.5 grid grid-cols-2 gap-1.5">
               {simpleMoveTargets.map((target) => (
-                <Fragment key={target.label}>
+                <Fragment key={target.aStepId}>
                   <button
                     key={`a-${target.aStepId}`}
                     onClick={() => setSimplePointFromContextMenu(target.aStepId)}
-                    className="h-10 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white cursor-pointer"
+                    className="h-10 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white cursor-pointer px-1 truncate"
                   >
-                    Set A{target.label}
+                    Set {getLetterLabel(target.moveIndex)}
                   </button>
                   <button
                     key={`b-${target.bStepId}`}
                     onClick={() => setSimplePointFromContextMenu(target.bStepId)}
-                    className="h-10 rounded bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white cursor-pointer"
+                    className="h-10 rounded bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white cursor-pointer px-1 truncate"
                   >
-                    Set B{target.label}
+                    Set {getLetterLabel(target.moveIndex + 1)}
                   </button>
                 </Fragment>
               ))}
@@ -2224,10 +2340,16 @@ export default function Viewport3D() {
           className={`absolute left-0 top-0 z-30 hidden items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-bold shadow-lg pointer-events-none ${
             item.color === 'cyan'
               ? 'border-cyan-300 bg-cyan-500/95 text-black shadow-cyan-500/20'
-              : 'border-violet-300 bg-violet-500/95 text-white shadow-violet-500/20'
+              : item.color === 'violet'
+              ? 'border-violet-300 bg-violet-500/95 text-white shadow-violet-500/20'
+              : item.color === 'emerald'
+              ? 'border-emerald-300 bg-emerald-500/95 text-white shadow-emerald-500/20'
+              : 'border-amber-300 bg-amber-500/95 text-black shadow-amber-500/20'
           }`}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${item.color === 'cyan' ? 'bg-black' : 'bg-white'}`} />
+          <span className={`h-1.5 w-1.5 rounded-full ${
+            item.color === 'cyan' || item.color === 'amber' ? 'bg-black' : 'bg-white'
+          }`} />
           {item.label}
         </div>
       ))}

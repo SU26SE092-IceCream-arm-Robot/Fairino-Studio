@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Clock, CopyPlus, PackagePlus, Radio, Route, Save, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Clock, CopyPlus, PackagePlus, Radio, Repeat, Route, Save, Trash2 } from 'lucide-react'
 import { useRobotStore } from '../../store/robotStore'
 import { translations } from '../../i18n/translations'
 import { JointAngles, SimpleModuleTemplate, SimpleWorkflowTemplate, TCPPose, WorkflowStep } from '../../types/robot.types'
@@ -9,6 +9,7 @@ type SimpleBlock =
   | { kind: 'moveAB'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL' }
   | { kind: 'delay'; id: string; stepIds: string[]; seconds: number }
   | { kind: 'do'; id: string; stepIds: string[]; doType: 'cabinet' | 'tool'; doIndex: number; doValue: 0 | 1 }
+  | { kind: 'loop'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL'; loopType: 'cycles' | 'seconds'; loopValue: number }
   | { kind: 'unknown'; id: string; stepIds: string[]; step: WorkflowStep }
 
 const createId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -17,6 +18,79 @@ const clonePose = (pose: TCPPose): TCPPose => ({ ...pose })
 
 const formatPose = (pose: TCPPose) =>
   `${Math.round(pose.x)}, ${Math.round(pose.y)}, ${Math.round(pose.z)}`
+
+const getLetterLabel = (num: number): string => {
+  let label = ''
+  let temp = num
+  while (temp > 0) {
+    const remainder = (temp - 1) % 26
+    label = String.fromCharCode(65 + remainder) + label
+    temp = Math.floor((temp - 1) / 26)
+  }
+  return label
+}
+
+const PoseInputs = ({
+  pose,
+  onChange,
+  disabled
+}: {
+  pose: TCPPose
+  onChange: (axis: keyof TCPPose, value: number) => void
+  disabled?: boolean
+}) => {
+  const [localValues, setLocalValues] = useState<Record<keyof TCPPose, string>>({
+    x: '', y: '', z: '', rx: '', ry: '', rz: ''
+  })
+
+  useEffect(() => {
+    setLocalValues({
+      x: pose.x !== undefined ? Math.round(pose.x).toString() : '0',
+      y: pose.y !== undefined ? Math.round(pose.y).toString() : '0',
+      z: pose.z !== undefined ? Math.round(pose.z).toString() : '0',
+      rx: pose.rx !== undefined ? Math.round(pose.rx).toString() : '0',
+      ry: pose.ry !== undefined ? Math.round(pose.ry).toString() : '0',
+      rz: pose.rz !== undefined ? Math.round(pose.rz).toString() : '0'
+    })
+  }, [pose])
+
+  const handleInputChange = (axis: keyof TCPPose, valStr: string) => {
+    setLocalValues((prev) => ({ ...prev, [axis]: valStr }))
+    const parsed = parseFloat(valStr)
+    if (!isNaN(parsed) && valStr !== '-' && !valStr.endsWith('.')) {
+      onChange(axis, parsed)
+    }
+  }
+
+  const handleBlur = (axis: keyof TCPPose) => {
+    const parsed = parseFloat(localValues[axis])
+    const finalVal = isNaN(parsed) ? 0 : parsed
+    onChange(axis, finalVal)
+    setLocalValues((prev) => ({ ...prev, [axis]: Math.round(finalVal).toString() }))
+  }
+
+  return (
+    <div className="mt-1.5 grid grid-cols-3 gap-1 bg-black/20 p-1.5 rounded border border-white/5" onClick={(e) => e.stopPropagation()}>
+      {(['x', 'y', 'z', 'rx', 'ry', 'rz'] as const).map((axis) => {
+        const label = axis.toUpperCase()
+        const color = axis === 'x' || axis === 'rx' ? 'text-red-400' : axis === 'y' || axis === 'ry' ? 'text-emerald-400' : 'text-blue-400'
+        return (
+          <div key={axis} className="space-y-0.5">
+            <span className={`text-[8px] font-bold block ${color}`}>{label}</span>
+            <input
+              type="text"
+              disabled={disabled}
+              value={localValues[axis]}
+              onChange={(e) => handleInputChange(axis, e.target.value)}
+              onBlur={() => handleBlur(axis)}
+              className="w-full bg-[#16161a] border border-white/10 rounded px-1 py-0.5 text-[10px] text-white font-mono text-center outline-none focus:border-blue-500/50"
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
   const blocks: SimpleBlock[] = []
@@ -45,6 +119,32 @@ const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
         speed: step.speed || 30,
         acc: step.acc || 30,
         motionType: step.type as 'MoveJ' | 'MoveL'
+      })
+      index += 2
+      continue
+    }
+
+    if (
+      (step.type === 'MoveL' || step.type === 'MoveJ') &&
+      (next?.type === 'MoveL' || next?.type === 'MoveJ') &&
+      step.simpleBlockId &&
+      step.simpleBlockId === next.simpleBlockId &&
+      step.simpleBlockRole === 'loopA' &&
+      next.simpleBlockRole === 'loopB' &&
+      step.tcpPose &&
+      next.tcpPose
+    ) {
+      blocks.push({
+        kind: 'loop',
+        id: step.simpleBlockId,
+        stepIds: [step.id, next.id],
+        pointA: step.tcpPose,
+        pointB: next.tcpPose,
+        speed: step.speed || 30,
+        acc: step.acc || 30,
+        motionType: step.type as 'MoveJ' | 'MoveL',
+        loopType: step.loopType || 'cycles',
+        loopValue: step.loopValue || 1
       })
       index += 2
       continue
@@ -135,7 +235,7 @@ export default function BlockWorkspace() {
 
   const selectBlock = (block: SimpleBlock) => {
     setSelectedStepId(block.stepIds[0] || null)
-    if (block.kind === 'moveAB') {
+    if (block.kind === 'moveAB' || block.kind === 'loop') {
       const firstStep = steps.find((s) => s.id === block.stepIds[0])
       if (firstStep && firstStep.jointAngles) {
         setJointAngles(firstStep.jointAngles)
@@ -168,6 +268,38 @@ export default function BlockWorkspace() {
         acc: 30,
         simpleBlockId: blockId,
         simpleBlockRole: 'moveB'
+      }
+    ]
+    reorderSteps(nextSteps)
+  }
+
+  const addLoop = (pointA: TCPPose = tcpPose, pointB: TCPPose = tcpPose) => {
+    const blockId = createId('simple_loop')
+    const nextSteps: WorkflowStep[] = [
+      ...steps,
+      {
+        id: createId('step'),
+        type: 'MoveJ',
+        label: 'Loop A',
+        tcpPose: clonePose(pointA),
+        jointAngles: [...jointAngles] as JointAngles,
+        speed: 30,
+        acc: 30,
+        simpleBlockId: blockId,
+        simpleBlockRole: 'loopA',
+        loopType: 'cycles',
+        loopValue: 1
+      },
+      {
+        id: createId('step'),
+        type: 'MoveJ',
+        label: 'Loop B',
+        tcpPose: clonePose(pointB),
+        jointAngles: [...jointAngles] as JointAngles,
+        speed: 30,
+        acc: 30,
+        simpleBlockId: blockId,
+        simpleBlockRole: 'loopB'
       }
     ]
     reorderSteps(nextSteps)
@@ -355,26 +487,31 @@ export default function BlockWorkspace() {
           </span>
           <span className="text-[10px] text-slate-500">
             {language === 'vi'
-              ? 'Thêm lệnh trước, sau đó chuột phải trong viewport để đặt A/B.'
-              : 'Add a command first, then right-click in the viewport to place A/B.'}
+              ? 'Thêm lệnh trước, sau đó chuột phải trong viewport để đặt điểm A/B.'
+              : 'Add a command first, then right-click in the viewport to place points A/B.'}
           </span>
         </div>
 
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-4 gap-1.5">
           <button onClick={() => addMoveAB()} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-blue-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
             <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-blue-500" />
             <Route size={15} className="mb-1 text-blue-400" />
-            <span className="block text-[11px] font-bold text-slate-100 leading-tight">Move A→B</span>
+            <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Move A→B</span>
+          </button>
+          <button onClick={() => addLoop()} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-violet-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
+            <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-violet-500" />
+            <Repeat size={15} className="mb-1 text-violet-400" />
+            <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Loop A↔B</span>
           </button>
           <button onClick={() => addDelay()} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-emerald-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
             <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-emerald-500" />
             <Clock size={15} className="mb-1 text-emerald-400" />
-            <span className="block text-[11px] font-bold text-slate-100 leading-tight">Delay</span>
+            <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Delay</span>
           </button>
           <button onClick={addDO} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-amber-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
             <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-amber-500" />
             <Radio size={15} className="mb-1 text-amber-400" />
-            <span className="block text-[11px] font-bold text-slate-100 leading-tight">Set DO</span>
+            <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Set DO</span>
           </button>
         </div>
 
@@ -461,154 +598,366 @@ export default function BlockWorkspace() {
             </div>
           </div>
         ) : (
-          blocks.map((block, index) => {
-            const moveNumber = block.kind === 'moveAB'
-              ? blocks.slice(0, index + 1).filter((item) => item.kind === 'moveAB').length
-              : 0
-            const firstStepIndex = steps.findIndex((step) => step.id === block.stepIds[0])
-            const isSelected = block.stepIds.includes(selectedStepId || '')
-            const isCurrentSim = isPlaying && block.stepIds.some((stepId) => steps.findIndex((step) => step.id === stepId) === currentStepIndex)
+          (() => {
+            const blockMotionIndices = new Map<string, number>()
+            let currentMotionCount = 0
+            blocks.forEach((b) => {
+              if (b.kind === 'moveAB' || b.kind === 'loop') {
+                currentMotionCount++
+                blockMotionIndices.set(b.id, currentMotionCount)
+              }
+            })
 
-            return (
-            <div
-              key={block.id}
-              onClick={() => selectBlock(block)}
-              className={`rounded-lg border bg-[#111114] overflow-hidden cursor-pointer transition ${
-                isCurrentSim
-                  ? 'border-emerald-500 bg-emerald-950/15'
-                  : isSelected
-                  ? 'border-blue-500 bg-blue-950/10'
-                  : 'border-[#2d2d34] hover:border-[#3a3a45]'
-              }`}
-            >
-              <div className="min-h-11 px-3 py-2 flex items-center justify-between gap-2 border-b border-white/5">
-                <div className="flex items-center gap-2 min-w-0">
-                  {block.kind === 'moveAB' && <Route size={15} className="text-blue-400 shrink-0" />}
-                  {block.kind === 'delay' && <Clock size={15} className="text-emerald-400 shrink-0" />}
-                  {block.kind === 'do' && <Radio size={15} className="text-amber-400 shrink-0" />}
-                  <span className="text-xs font-bold text-white truncate">
-                    {block.kind === 'moveAB' && `Move A${moveNumber} → B${moveNumber}`}
-                    {block.kind === 'delay' && 'Delay'}
-                    {block.kind === 'do' && 'Set DO'}
-                    {block.kind === 'unknown' && block.step.type}
-                  </span>
-                  {isSelected && firstStepIndex >= 0 && (
-                    <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-bold text-blue-300">
-                      Start #{firstStepIndex + 1}
+            return blocks.map((block, index) => {
+              const motionIndex = blockMotionIndices.get(block.id) || 0
+              const firstStepIndex = steps.findIndex((step) => step.id === block.stepIds[0])
+              const isSelected = block.stepIds.includes(selectedStepId || '')
+              const isCurrentSim = isPlaying && block.stepIds.some((stepId) => steps.findIndex((step) => step.id === stepId) === currentStepIndex)
+
+              return (
+              <div
+                key={block.id}
+                onClick={() => selectBlock(block)}
+                className={`rounded-lg border bg-[#111114] overflow-hidden cursor-pointer transition ${
+                  isCurrentSim
+                    ? 'border-emerald-500 bg-emerald-950/15'
+                    : isSelected
+                    ? 'border-blue-500 bg-blue-950/10'
+                    : 'border-[#2d2d34] hover:border-[#3a3a45]'
+                }`}
+              >
+                <div className="min-h-11 px-3 py-2 flex items-center justify-between gap-2 border-b border-white/5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {block.kind === 'moveAB' && <Route size={15} className="text-blue-400 shrink-0" />}
+                    {block.kind === 'loop' && <Repeat size={15} className="text-violet-400 shrink-0" />}
+                    {block.kind === 'delay' && <Clock size={15} className="text-emerald-400 shrink-0" />}
+                    {block.kind === 'do' && <Radio size={15} className="text-amber-400 shrink-0" />}
+                    <span className="text-xs font-bold text-white truncate">
+                      {block.kind === 'moveAB' && `Move ${getLetterLabel(motionIndex)} → ${getLetterLabel(motionIndex + 1)}`}
+                      {block.kind === 'loop' && `Loop ${getLetterLabel(motionIndex)} ↔ ${getLetterLabel(motionIndex + 1)}`}
+                      {block.kind === 'delay' && 'Delay'}
+                      {block.kind === 'do' && 'Set DO'}
+                      {block.kind === 'unknown' && block.step.type}
                     </span>
-                  )}
+                    {isSelected && firstStepIndex >= 0 && (
+                      <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-bold text-blue-300">
+                        Start #{firstStepIndex + 1}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => moveBlock(index, 'up')} disabled={index === 0 || isPlaying} className="p-1.5 rounded hover:bg-white/10 text-slate-400 disabled:opacity-30 cursor-pointer"><ArrowUp size={12} /></button>
+                    <button onClick={() => moveBlock(index, 'down')} disabled={index === blocks.length - 1 || isPlaying} className="p-1.5 rounded hover:bg-white/10 text-slate-400 disabled:opacity-30 cursor-pointer"><ArrowDown size={12} /></button>
+                    <button onClick={() => removeBlock(block)} disabled={isPlaying} className="p-1.5 rounded hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 disabled:opacity-30 cursor-pointer"><Trash2 size={12} /></button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => moveBlock(index, 'up')} disabled={index === 0 || isPlaying} className="p-1.5 rounded hover:bg-white/10 text-slate-400 disabled:opacity-30 cursor-pointer"><ArrowUp size={12} /></button>
-                  <button onClick={() => moveBlock(index, 'down')} disabled={index === blocks.length - 1 || isPlaying} className="p-1.5 rounded hover:bg-white/10 text-slate-400 disabled:opacity-30 cursor-pointer"><ArrowDown size={12} /></button>
-                  <button onClick={() => removeBlock(block)} disabled={isPlaying} className="p-1.5 rounded hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 disabled:opacity-30 cursor-pointer"><Trash2 size={12} /></button>
-                </div>
-              </div>
 
-              {block.kind === 'moveAB' && (
-                <div className="p-3 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => updateStepById(block.stepIds[0], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-blue-600/90 hover:bg-blue-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
-                      TCP → A{moveNumber}
-                    </button>
-                    <button onClick={() => updateStepById(block.stepIds[1], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-indigo-600/90 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
-                      TCP → B{moveNumber}
-                    </button>
-                  </div>
-                  <div className="rounded border border-blue-500/20 bg-blue-950/20 px-2 py-1.5 text-[10px] text-blue-100">
-                    {language === 'vi'
-                      ? `Right-click vào sàn hoặc vật thể trong viewport, rồi chọn Set A${moveNumber} hoặc Set B${moveNumber}.`
-                      : `Viewport shows blue A${moveNumber}, purple B${moveNumber}, and the motion path between them.`}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* Left-click coord button A to update joint state and select step A */}
-                    <button 
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedStepId(block.stepIds[0])
-                        const stepA = steps.find((s) => s.id === block.stepIds[0])
-                        if (stepA?.jointAngles) setJointAngles(stepA.jointAngles)
-                      }}
-                      className="h-12 rounded bg-[#202027] hover:bg-blue-950/30 border border-blue-500/30 hover:border-blue-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
-                      title={language === 'vi' ? 'Di chuyển robot đến điểm A' : 'Move robot to point A'}
-                    >
-                      <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider block">Đến điểm A{moveNumber}</span>
-                      <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointA)}</span>
-                    </button>
-                    {/* Left-click coord button B to update joint state and select step B */}
-                    <button 
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedStepId(block.stepIds[1])
-                        const stepB = steps.find((s) => s.id === block.stepIds[1])
-                        if (stepB?.jointAngles) setJointAngles(stepB.jointAngles)
-                      }}
-                      className="h-12 rounded bg-[#202027] hover:bg-violet-950/30 border border-violet-500/30 hover:border-violet-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
-                      title={language === 'vi' ? 'Di chuyển robot đến điểm B' : 'Move robot to point B'}
-                    >
-                      <span className="text-[9px] font-bold text-violet-400 uppercase tracking-wider block">Đến điểm B{moveNumber}</span>
-                      <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointB)}</span>
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="text-[10px] text-slate-500">
-                      {language === 'vi' ? 'Kiểu chạy' : 'Motion'}
-                      <select
-                        value={block.motionType}
-                        onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({
-                          ...step,
-                          type: e.target.value as 'MoveJ' | 'MoveL',
-                          label: step.simpleBlockRole === 'moveA'
-                            ? (e.target.value === 'MoveJ' ? 'Move A' : 'Move A')
-                            : (e.target.value === 'MoveJ' ? 'Move B' : 'Move B')
-                        }))}
-                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                {block.kind === 'moveAB' && (
+                  <div className="p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => updateStepById(block.stepIds[0], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-blue-600/90 hover:bg-blue-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
+                        TCP → {getLetterLabel(motionIndex)}
+                      </button>
+                      <button onClick={() => updateStepById(block.stepIds[1], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-indigo-600/90 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
+                        TCP → {getLetterLabel(motionIndex + 1)}
+                      </button>
+                    </div>
+                    <div className="rounded border border-blue-500/20 bg-blue-950/20 px-2 py-1.5 text-[10px] text-blue-100">
+                      {language === 'vi'
+                        ? `Right-click vào sàn hoặc vật thể trong viewport, rồi chọn Set ${getLetterLabel(motionIndex)} hoặc Set ${getLetterLabel(motionIndex + 1)}.`
+                        : `Viewport shows blue ${getLetterLabel(motionIndex)}, purple ${getLetterLabel(motionIndex + 1)}, and the motion path between them.`}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedStepId(block.stepIds[0])
+                          const stepA = steps.find((s) => s.id === block.stepIds[0])
+                          if (stepA?.jointAngles) setJointAngles(stepA.jointAngles)
+                        }}
+                        className="h-12 rounded bg-[#202027] hover:bg-blue-950/30 border border-blue-500/30 hover:border-blue-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                        title={language === 'vi' ? `Di chuyển robot đến điểm ${getLetterLabel(motionIndex)}` : `Move robot to point ${getLetterLabel(motionIndex)}`}
                       >
-                        <option value="MoveJ">{language === 'vi' ? 'Đi vòng' : 'Joint'}</option>
-                        <option value="MoveL">{language === 'vi' ? 'Đi thẳng' : 'Linear'}</option>
-                      </select>
-                    </label>
+                        <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider block">Đến điểm {getLetterLabel(motionIndex)}</span>
+                        <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointA)}</span>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedStepId(block.stepIds[1])
+                          const stepB = steps.find((s) => s.id === block.stepIds[1])
+                          if (stepB?.jointAngles) setJointAngles(stepB.jointAngles)
+                        }}
+                        className="h-12 rounded bg-[#202027] hover:bg-violet-950/30 border border-violet-500/30 hover:border-violet-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                        title={language === 'vi' ? `Di chuyển robot đến điểm ${getLetterLabel(motionIndex + 1)}` : `Move robot to point ${getLetterLabel(motionIndex + 1)}`}
+                      >
+                        <span className="text-[9px] font-bold text-violet-400 uppercase tracking-wider block">Đến điểm {getLetterLabel(motionIndex + 1)}</span>
+                        <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointB)}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[9px] text-slate-500 block font-bold">Tọa độ {getLetterLabel(motionIndex)}</span>
+                        <PoseInputs
+                          pose={block.pointA}
+                          disabled={isPlaying}
+                          onChange={(axis, val) => {
+                            updateStepById(block.stepIds[0], (step) => ({
+                              ...step,
+                              tcpPose: { ...step.tcpPose!, [axis]: val }
+                            }))
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[9px] text-slate-500 block font-bold">Tọa độ {getLetterLabel(motionIndex + 1)}</span>
+                        <PoseInputs
+                          pose={block.pointB}
+                          disabled={isPlaying}
+                          onChange={(axis, val) => {
+                            updateStepById(block.stepIds[1], (step) => ({
+                              ...step,
+                              tcpPose: { ...step.tcpPose!, [axis]: val }
+                            }))
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="text-[10px] text-slate-500">
+                        {language === 'vi' ? 'Kiểu chạy' : 'Motion'}
+                        <select
+                          value={block.motionType}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({
+                            ...step,
+                            type: e.target.value as 'MoveJ' | 'MoveL',
+                            label: step.simpleBlockRole === 'moveA'
+                              ? `Move ${getLetterLabel(motionIndex)}`
+                              : `Move ${getLetterLabel(motionIndex + 1)}`
+                          }))}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                        >
+                          <option value="MoveJ">{language === 'vi' ? 'Đi vòng' : 'Joint'}</option>
+                          <option value="MoveL">{language === 'vi' ? 'Đi thẳng' : 'Linear'}</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] text-slate-500">
+                        Speed
+                        <input
+                          value={block.speed}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: e.target.value as any }))}
+                          onBlur={(e) => {
+                            let val = parseInt(e.target.value) || 30
+                            if (val > 100) val = 100
+                            if (val < 30) val = 30
+                            updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: val }))
+                          }}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none"
+                        />
+                      </label>
+                      <label className="text-[10px] text-slate-500">
+                        Acc
+                        <input
+                          value={block.acc}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: e.target.value as any }))}
+                          onBlur={(e) => {
+                            let val = parseInt(e.target.value) || 30
+                            if (val > 100) val = 100
+                            if (val < 30) val = 30
+                            updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: val }))
+                          }}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {block.kind === 'loop' && (
+                  <div className="p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => updateStepById(block.stepIds[0], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-blue-600/90 hover:bg-blue-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
+                        TCP → {getLetterLabel(motionIndex)}
+                      </button>
+                      <button onClick={() => updateStepById(block.stepIds[1], (step) => ({ ...step, tcpPose: clonePose(tcpPose), jointAngles: [...jointAngles] as JointAngles }))} disabled={isPlaying} className="h-10 rounded bg-indigo-600/90 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer disabled:opacity-40">
+                        TCP → {getLetterLabel(motionIndex + 1)}
+                      </button>
+                    </div>
+                    <div className="rounded border border-blue-500/20 bg-blue-950/20 px-2 py-1.5 text-[10px] text-blue-100">
+                      {language === 'vi'
+                        ? `Right-click vào sàn hoặc vật thể trong viewport, rồi chọn Set ${getLetterLabel(motionIndex)} hoặc Set ${getLetterLabel(motionIndex + 1)}.`
+                        : `Viewport shows green Loop ${getLetterLabel(motionIndex)}, orange Loop ${getLetterLabel(motionIndex + 1)}, and the motion path between them.`}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedStepId(block.stepIds[0])
+                          const stepA = steps.find((s) => s.id === block.stepIds[0])
+                          if (stepA?.jointAngles) setJointAngles(stepA.jointAngles)
+                        }}
+                        className="h-12 rounded bg-[#202027] hover:bg-blue-950/30 border border-blue-500/30 hover:border-blue-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                        title={language === 'vi' ? `Di chuyển robot đến điểm ${getLetterLabel(motionIndex)}` : `Move robot to point ${getLetterLabel(motionIndex)}`}
+                      >
+                        <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider block">Đến điểm {getLetterLabel(motionIndex)}</span>
+                        <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointA)}</span>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedStepId(block.stepIds[1])
+                          const stepB = steps.find((s) => s.id === block.stepIds[1])
+                          if (stepB?.jointAngles) setJointAngles(stepB.jointAngles)
+                        }}
+                        className="h-12 rounded bg-[#202027] hover:bg-violet-950/30 border border-violet-500/30 hover:border-violet-500 text-left px-2.5 py-1.5 cursor-pointer transition flex flex-col justify-between"
+                        title={language === 'vi' ? `Di chuyển robot đến điểm ${getLetterLabel(motionIndex + 1)}` : `Move robot to point ${getLetterLabel(motionIndex + 1)}`}
+                      >
+                        <span className="text-[9px] font-bold text-violet-400 uppercase tracking-wider block">Đến điểm {getLetterLabel(motionIndex + 1)}</span>
+                        <span className="font-mono text-[10px] text-slate-300 font-bold truncate block">{formatPose(block.pointB)}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[9px] text-slate-500 block font-bold">Tọa độ {getLetterLabel(motionIndex)}</span>
+                        <PoseInputs
+                          pose={block.pointA}
+                          disabled={isPlaying}
+                          onChange={(axis, val) => {
+                            updateStepById(block.stepIds[0], (step) => ({
+                              ...step,
+                              tcpPose: { ...step.tcpPose!, [axis]: val }
+                            }))
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[9px] text-slate-500 block font-bold">Tọa độ {getLetterLabel(motionIndex + 1)}</span>
+                        <PoseInputs
+                          pose={block.pointB}
+                          disabled={isPlaying}
+                          onChange={(axis, val) => {
+                            updateStepById(block.stepIds[1], (step) => ({
+                              ...step,
+                              tcpPose: { ...step.tcpPose!, [axis]: val }
+                            }))
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[10px] text-slate-500">
+                        {language === 'vi' ? 'Kiểu lặp' : 'Loop Type'}
+                        <select
+                          value={block.loopType}
+                          onChange={(e) => updateStepById(block.stepIds[0], (step) => ({
+                            ...step,
+                            loopType: e.target.value as 'cycles' | 'seconds',
+                            label: `Loop ${getLetterLabel(motionIndex)}↔${getLetterLabel(motionIndex + 1)} (${e.target.value === 'cycles' ? 'chu kỳ' : 'giây'})`
+                          }))}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                        >
+                          <option value="cycles">{language === 'vi' ? 'Số chu kỳ' : 'Cycles'}</option>
+                          <option value="seconds">{language === 'vi' ? 'Số giây' : 'Seconds'}</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] text-slate-500">
+                        {block.loopType === 'cycles' ? (language === 'vi' ? 'Chu kỳ lặp' : 'Cycles') : (language === 'vi' ? 'Số giây lặp' : 'Seconds')}
+                        <input
+                          type="number"
+                          min="1"
+                          value={block.loopValue}
+                          onChange={(e) => {
+                            const val = Math.max(1, parseInt(e.target.value) || 1)
+                            updateStepById(block.stepIds[0], (step) => ({ ...step, loopValue: val }))
+                          }}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="text-[10px] text-slate-500">
+                        {language === 'vi' ? 'Kiểu chạy' : 'Motion'}
+                        <select
+                          value={block.motionType}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({
+                            ...step,
+                            type: e.target.value as 'MoveJ' | 'MoveL'
+                          }))}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none cursor-pointer"
+                        >
+                          <option value="MoveJ">{language === 'vi' ? 'Đi vòng' : 'Joint'}</option>
+                          <option value="MoveL">{language === 'vi' ? 'Đi thẳng' : 'Linear'}</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] text-slate-500">
+                        Speed
+                        <input
+                          value={block.speed}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: e.target.value as any }))}
+                          onBlur={(e) => {
+                            let val = parseInt(e.target.value) || 30
+                            if (val > 100) val = 100
+                            if (val < 30) val = 30
+                            updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: val }))
+                          }}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none"
+                        />
+                      </label>
+                      <label className="text-[10px] text-slate-500">
+                        Acc
+                        <input
+                          value={block.acc}
+                          onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: e.target.value as any }))}
+                          onBlur={(e) => {
+                            let val = parseInt(e.target.value) || 30
+                            if (val > 100) val = 100
+                            if (val < 30) val = 30
+                            updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: val }))
+                          }}
+                          className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {block.kind === 'delay' && (
+                  <div className="p-3">
                     <label className="text-[10px] text-slate-500">
-                      Speed
-                      <input value={block.speed} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, speed: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none" />
-                    </label>
-                    <label className="text-[10px] text-slate-500">
-                      Acc
-                      <input value={block.acc} onChange={(e) => updateStepsByIds(block.stepIds, (step) => ({ ...step, acc: Number(e.target.value) || 30 }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-1.5 py-1.5 text-xs text-white outline-none" />
+                      Seconds
+                      <input value={block.seconds} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, delayMs: Math.round((Number(e.target.value) || 0) * 1000), label: `Delay ${e.target.value}s` }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none" />
                     </label>
                   </div>
-                </div>
-              )}
+                )}
 
-              {block.kind === 'delay' && (
-                <div className="p-3">
-                  <label className="text-[10px] text-slate-500">
-                    Seconds
-                    <input value={block.seconds} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, delayMs: Math.round((Number(e.target.value) || 0) * 1000), label: `Delay ${e.target.value}s` }))} className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none" />
-                  </label>
-                </div>
-              )}
-
-              {block.kind === 'do' && (
-                <div className="p-3 grid grid-cols-3 gap-2">
-                  <select value={block.doType} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doType: e.target.value as 'cabinet' | 'tool', doIndex: e.target.value === 'tool' ? 0 : 1 }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
-                    <option value="cabinet">{t('cabinetDO')}</option>
-                    <option value="tool">{t('toolDO')}</option>
-                  </select>
-                  <select value={block.doIndex} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doIndex: Number(e.target.value) }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
-                    {(block.doType === 'tool' ? [0, 1] : [1, 2, 3, 4, 5, 6, 7, 8]).map((num) => <option key={num} value={num}>DO {num}</option>)}
-                  </select>
-                  <select value={block.doValue} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doValue: Number(e.target.value) as 0 | 1 }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
-                    <option value={1}>{t('turnOn')}</option>
-                    <option value={0}>{t('turnOff')}</option>
-                  </select>
-                </div>
-              )}
-            </div>
-            )
-          })
+                {block.kind === 'do' && (
+                  <div className="p-3 grid grid-cols-3 gap-2">
+                    <select value={block.doType} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doType: e.target.value as 'cabinet' | 'tool', doIndex: e.target.value === 'tool' ? 0 : 1 }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
+                      <option value="cabinet">{t('cabinetDO')}</option>
+                      <option value="tool">{t('toolDO')}</option>
+                    </select>
+                    <select value={block.doIndex} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doIndex: Number(e.target.value) }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
+                      {(block.doType === 'tool' ? [0, 1] : [1, 2, 3, 4, 5, 6, 7, 8]).map((num) => <option key={num} value={num}>DO {num}</option>)}
+                    </select>
+                    <select value={block.doValue} onChange={(e) => updateStepById(block.stepIds[0], (step) => ({ ...step, doValue: Number(e.target.value) as 0 | 1 }))} className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none">
+                      <option value={1}>{t('turnOn')}</option>
+                      <option value={0}>{t('turnOff')}</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+              )
+            })
+          })()
         )}
       </div>
 

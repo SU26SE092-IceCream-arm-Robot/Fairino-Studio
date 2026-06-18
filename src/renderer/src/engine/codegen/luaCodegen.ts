@@ -37,26 +37,22 @@ end
     return lua
   }
 
-  // Helper: wrap a JS number as a double-safe toDouble("x.xxx") call.
-  // Using string quoting ensures the Fairino LUA runtime parses via tonumber()
-  // rather than treating the literal as an integer.
-  const d = (n: number, decimals = 3): string => `toDouble("${n.toFixed(decimals)}")`
+  const d = (n: any, decimals = 3): string => {
+    const parsed = parseFloat(n)
+    const val = isNaN(parsed) ? 0 : parsed
+    return `toDouble("${val.toFixed(decimals)}")`
+  }
 
-  steps.forEach((step, idx) => {
-    lua += `-- [Bước ${idx + 1}] ${step.label}\n`
-
-    if (step.comment) {
-      lua += `-- Ghi chú: ${step.comment}\n`
-    }
-
+  const generateStepCode = (step: WorkflowStep): string => {
+    let code = ''
     switch (step.type) {
       case 'MoveJ':
         if (step.jointAngles) {
           const [j1, j2, j3, j4, j5, j6] = step.jointAngles
           // Format: MoveJ({j1..j6}, tool, user, vel, acc, blendT, blendR)
-          lua += `MoveJ({${d(j1)}, ${d(j2)}, ${d(j3)}, ${d(j4)}, ${d(j5)}, ${d(j6)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))\n`
+          code += `MoveJ({${d(j1)}, ${d(j2)}, ${d(j3)}, ${d(j4)}, ${d(j5)}, ${d(j6)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))`
         } else {
-          lua += `-- Lỗi: Thiếu thông số góc khớp cho MoveJ\n`
+          code += `-- Lỗi: Thiếu thông số góc khớp cho MoveJ`
         }
         break
 
@@ -64,27 +60,27 @@ end
         if (step.tcpPose) {
           const { x, y, z, rx, ry, rz } = step.tcpPose
           // Format: MoveL({x, y, z, rx, ry, rz}, tool, user, vel, acc, blendT, blendR)
-          lua += `MoveL({${d(x)}, ${d(y)}, ${d(z)}, ${d(rx)}, ${d(ry)}, ${d(rz)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))\n`
+          code += `MoveL({${d(x)}, ${d(y)}, ${d(z)}, ${d(rx)}, ${d(ry)}, ${d(rz)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))`
         } else {
-          lua += `-- Lỗi: Thiếu thông số TCP cho MoveL\n`
+          code += `-- Lỗi: Thiếu thông số TCP cho MoveL`
         }
         break
 
       case 'RotateJoint':
         if (step.jointAngles) {
           const [j1, j2, j3, j4, j5, j6] = step.jointAngles
-          lua += `MoveJ({${d(j1)}, ${d(j2)}, ${d(j3)}, ${d(j4)}, ${d(j5)}, ${d(j6)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))\n`
+          code += `MoveJ({${d(j1)}, ${d(j2)}, ${d(j3)}, ${d(j4)}, ${d(j5)}, ${d(j6)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))`
         } else {
-          lua += `-- Lỗi: Chưa giải được góc khớp cho RotateJoint\n`
+          code += `-- Lỗi: Chưa giải được góc khớp cho RotateJoint`
         }
         break
 
       case 'MoveTCP':
         if (step.tcpPose) {
           const { x, y, z, rx, ry, rz } = step.tcpPose
-          lua += `MoveL({${d(x)}, ${d(y)}, ${d(z)}, ${d(rx)}, ${d(ry)}, ${d(rz)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))\n`
+          code += `MoveL({${d(x)}, ${d(y)}, ${d(z)}, ${d(rx)}, ${d(ry)}, ${d(rz)}}, 0, 0, ${d(step.speed, 1)}, ${d(step.acc, 1)}, toDouble("-1.0"), toDouble("-1.0"))`
         } else {
-          lua += `-- Lỗi: Chưa giải được tọa độ TCP cho MoveTCP\n`
+          code += `-- Lỗi: Chưa giải được tọa độ TCP cho MoveTCP`
         }
         break
 
@@ -93,43 +89,87 @@ end
         const doVal = step.doValue !== undefined ? step.doValue : 1
         const doType = step.doType || 'cabinet'
         if (doType === 'tool') {
-          // Format: SetToolDO(id, status, smooth, block) — these are integer flags, no toDouble needed
-          lua += `SetToolDO(${doIdx}, ${doVal}, 0, 0)\n`
+          // Format: SetToolDO(id, status, smooth, block)
+          code += `SetToolDO(${doIdx}, ${doVal}, 0, 0)`
         } else {
-          // Format: SetDO(index, status, block) — integer flags
-          lua += `SetDO(${doIdx}, ${doVal}, 0)\n`
+          // Format: SetDO(index, status, block)
+          code += `SetDO(${doIdx}, ${doVal}, 0)`
         }
         break
       }
 
       case 'WaitMs': {
         const delay = step.delayMs !== undefined ? step.delayMs : 1000
-        // Format: WaitMs(ms) — ms is integer, no conversion needed
-        lua += `WaitMs(${delay})\n`
+        // Format: WaitMs(ms)
+        code += `WaitMs(${delay})`
         break
       }
 
       case 'GripperOpen':
-        // Map to setting DO1 to 0 (default gripper wiring setup)
-        lua += `-- Điều khiển mở kẹp tay gắp\n`
-        lua += `SetDO(1, 0, 0)\n`
-        lua += `WaitMs(500)\n`
+        code += `-- Điều khiển mở kẹp tay gắp\n`
+        code += `SetDO(1, 0, 0)\n`
+        code += `WaitMs(500)`
         break
 
       case 'GripperClose':
-        // Map to setting DO1 to 1 (default gripper wiring setup)
-        lua += `-- Điều khiển đóng kẹp tay gắp\n`
-        lua += `SetDO(1, 1, 0)\n`
-        lua += `WaitMs(500)\n`
+        code += `-- Điều khiển đóng kẹp tay gắp\n`
+        code += `SetDO(1, 1, 0)\n`
+        code += `WaitMs(500)`
         break
 
       case 'Comment':
-        // Just comments, no code output
+        // No execution code, just represented by comment header in main loop
         break
     }
+    return code
+  }
 
+  let idx = 0
+  while (idx < steps.length) {
+    const step = steps[idx]
+    const nextStep = steps[idx + 1]
+
+    if (step.simpleBlockRole === 'loopA' && nextStep && nextStep.simpleBlockRole === 'loopB') {
+      lua += `-- [Bước ${idx + 1}] Vòng lặp: ${step.label}\n`
+      if (step.comment) {
+        lua += `-- Ghi chú: ${step.comment}\n`
+      }
+
+      const loopType = step.loopType || 'cycles'
+      const loopValue = step.loopValue || 1
+
+      if (loopType === 'cycles') {
+        lua += `for loop_idx = 1, ${loopValue} do\n`
+        lua += `    -- Đi đến B\n`
+        lua += `    ${generateStepCode(nextStep).replace(/\n/g, '\n    ')}\n`
+        lua += `    -- Đi đến A\n`
+        lua += `    ${generateStepCode(step).replace(/\n/g, '\n    ')}\n`
+        lua += `end\n\n`
+      } else {
+        lua += `local start_time = os.clock()\n`
+        lua += `while (os.clock() - start_time < ${loopValue}) do\n`
+        lua += `    -- Đi đến B\n`
+        lua += `    ${generateStepCode(nextStep).replace(/\n/g, '\n    ')}\n`
+        lua += `    -- Đi đến A\n`
+        lua += `    ${generateStepCode(step).replace(/\n/g, '\n    ')}\n`
+        lua += `end\n\n`
+      }
+
+      idx += 2
+      continue
+    }
+
+    lua += `-- [Bước ${idx + 1}] ${step.label}\n`
+    if (step.comment) {
+      lua += `-- Ghi chú: ${step.comment}\n`
+    }
+    const stepCode = generateStepCode(step)
+    if (stepCode) {
+      lua += `${stepCode}\n`
+    }
     lua += `\n`
-  })
+    idx++
+  }
 
   lua += `-- Kết thúc chương trình\n`
   return lua

@@ -20,6 +20,7 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
   const t = (key: keyof typeof translations.vi) => translations[language][key]
 
   const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? objects[0]
+  const lengthUnit = useRobotStore((state) => state.lengthUnit) || 'cm'
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -264,6 +265,52 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
               </div>
             </div>
           </div>
+
+          {/* Actual Size (Length, Width, Height) */}
+          {(selectedObject as any).baseSize && (
+            <div className="pt-1 border-t border-[#2d2d34] mt-2">
+              <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider mb-1">
+                {language === 'vi' ? 'Kích thước thực tế' : 'Actual Size'}
+              </span>
+              <div className="bg-[#121214] p-1.5 rounded border border-[#2d2d34] font-mono text-[11px] text-slate-300 flex justify-around">
+                <div className="text-center">
+                  <span className="text-slate-500 text-[9px] block uppercase font-bold">{language === 'vi' ? 'Dài' : 'Len'}</span>
+                  <span className="font-bold text-blue-400">
+                    {(() => {
+                      const valMm = (selectedObject as any).baseSize.x * selectedObject.transform.sx
+                      if (lengthUnit === 'm') return (valMm / 1000).toFixed(3) + ' m'
+                      if (lengthUnit === 'cm') return (valMm / 10).toFixed(1) + ' cm'
+                      return valMm.toFixed(0) + ' mm'
+                    })()}
+                  </span>
+                </div>
+                <div className="border-r border-[#2d2d34] h-7" />
+                <div className="text-center">
+                  <span className="text-slate-500 text-[9px] block uppercase font-bold">{language === 'vi' ? 'Rộng' : 'Wid'}</span>
+                  <span className="font-bold text-emerald-400">
+                    {(() => {
+                      const valMm = (selectedObject as any).baseSize.y * selectedObject.transform.sy
+                      if (lengthUnit === 'm') return (valMm / 1000).toFixed(3) + ' m'
+                      if (lengthUnit === 'cm') return (valMm / 10).toFixed(1) + ' cm'
+                      return valMm.toFixed(0) + ' mm'
+                    })()}
+                  </span>
+                </div>
+                <div className="border-r border-[#2d2d34] h-7" />
+                <div className="text-center">
+                  <span className="text-slate-500 text-[9px] block uppercase font-bold">{language === 'vi' ? 'Cao' : 'Hei'}</span>
+                  <span className="font-bold text-amber-400">
+                    {(() => {
+                      const valMm = (selectedObject as any).baseSize.z * selectedObject.transform.sz
+                      if (lengthUnit === 'm') return (valMm / 1000).toFixed(3) + ' m'
+                      if (lengthUnit === 'cm') return (valMm / 10).toFixed(1) + ' cm'
+                      return valMm.toFixed(0) + ' mm'
+                    })()}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

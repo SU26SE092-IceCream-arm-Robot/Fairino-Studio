@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { JointAngles } from '../../types/robot.types'
@@ -36,11 +36,6 @@ const JOINT_BOUNDS = [
   { min: -175, max: 175 }
 ]
 
-const formatLength = (valueMm: number, unit: 'mm' | 'cm' | 'm') => {
-  if (unit === 'm') return (valueMm / 1000).toFixed(4)
-  if (unit === 'cm') return (valueMm / 10).toFixed(2)
-  return valueMm.toFixed(1)
-}
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
@@ -181,6 +176,7 @@ export default function RobotSidebar() {
   const setIKMode = useRobotStore((state) => state.setIKMode)
   const selectedJointName = useRobotStore((state) => state.selectedJointName)
   const setSelectedJointName = useRobotStore((state) => state.setSelectedJointName)
+  const solveIKCallback = useRobotStore((state) => state.solveIKCallback)
 
   const lengthUnit = useRobotStore((state) => state.lengthUnit)
   const setLengthUnit = useRobotStore((state) => state.setLengthUnit)
@@ -192,6 +188,73 @@ export default function RobotSidebar() {
 
   const language = useRobotStore((state) => state.language)
   const t = (key: keyof typeof translations.vi) => translations[language][key]
+
+  const [localTCP, setLocalTCP] = useState<Record<keyof typeof tcpPose, string>>({
+    x: '', y: '', z: '', rx: '', ry: '', rz: ''
+  })
+  const [focusedField, setFocusedField] = useState<keyof typeof tcpPose | null>(null)
+
+  useEffect(() => {
+    const formatVal = (val: number, isLength: boolean, field: keyof typeof tcpPose) => {
+      if (focusedField === field) return localTCP[field]
+      if (isLength) {
+        if (lengthUnit === 'm') return (val / 1000).toFixed(4)
+        if (lengthUnit === 'cm') return (val / 10).toFixed(2)
+        return val.toFixed(1)
+      } else {
+        if (angleUnit === 'rad') return (val * Math.PI / 180).toFixed(3)
+        return val.toFixed(1)
+      }
+    }
+
+    setLocalTCP({
+      x: formatVal(tcpPose.x, true, 'x'),
+      y: formatVal(tcpPose.y, true, 'y'),
+      z: formatVal(tcpPose.z, true, 'z'),
+      rx: formatVal(tcpPose.rx, false, 'rx'),
+      ry: formatVal(tcpPose.ry, false, 'ry'),
+      rz: formatVal(tcpPose.rz, false, 'rz'),
+    })
+  }, [tcpPose, lengthUnit, angleUnit, focusedField])
+
+  const handleTCPChange = (axis: keyof typeof tcpPose, valStr: string) => {
+    setLocalTCP((prev) => ({ ...prev, [axis]: valStr }))
+
+    const parsed = parseFloat(valStr)
+    if (isNaN(parsed) || valStr === '-' || valStr.endsWith('.')) return
+
+    let valInStore = parsed
+    if (axis === 'x' || axis === 'y' || axis === 'z') {
+      if (lengthUnit === 'cm') valInStore = parsed * 10
+      else if (lengthUnit === 'm') valInStore = parsed * 1000
+    } else {
+      if (angleUnit === 'rad') valInStore = parsed * 180 / Math.PI
+    }
+
+    const targetPose = { ...tcpPose, [axis]: valInStore }
+    if (solveIKCallback) {
+      const newJoints = solveIKCallback(targetPose, jointAngles)
+      if (newJoints) {
+        setJointAngles(newJoints)
+      }
+    }
+  }
+
+  const handleTCPBlur = (axis: keyof typeof tcpPose) => {
+    setFocusedField(null)
+    const val = tcpPose[axis]
+    const isLength = axis === 'x' || axis === 'y' || axis === 'z'
+    let formatted = ''
+    if (isLength) {
+      if (lengthUnit === 'm') formatted = (val / 1000).toFixed(4)
+      else if (lengthUnit === 'cm') formatted = (val / 10).toFixed(2)
+      else formatted = val.toFixed(1)
+    } else {
+      if (angleUnit === 'rad') formatted = (val * Math.PI / 180).toFixed(3)
+      else formatted = val.toFixed(1)
+    }
+    setLocalTCP((prev) => ({ ...prev, [axis]: formatted }))
+  }
 
   const handleJointChange = (idx: number, val: number) => {
     const updated = [...jointAngles] as JointAngles
@@ -387,30 +450,32 @@ export default function RobotSidebar() {
             <InfoTooltip text={t('tooltipTCP')} />
           </span>
           <div className="grid grid-cols-3 gap-2">
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-red-400 block font-bold">X ({lengthUnit})</span>
-              <span className="text-sm font-mono font-semibold">{formatLength(tcpPose.x, lengthUnit)}</span>
-            </div>
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-emerald-400 block font-bold">Y ({lengthUnit})</span>
-              <span className="text-sm font-mono font-semibold">{formatLength(tcpPose.y, lengthUnit)}</span>
-            </div>
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-blue-400 block font-bold">Z ({lengthUnit})</span>
-              <span className="text-sm font-mono font-semibold">{formatLength(tcpPose.z, lengthUnit)}</span>
-            </div>
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-red-300 block font-bold">Rx ({angleUnit})</span>
-              <span className="text-sm font-mono font-semibold">{angleUnit === 'rad' ? (tcpPose.rx * Math.PI / 180).toFixed(3) : tcpPose.rx.toFixed(1)}</span>
-            </div>
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-emerald-300 block font-bold">Ry ({angleUnit})</span>
-              <span className="text-sm font-mono font-semibold">{angleUnit === 'rad' ? (tcpPose.ry * Math.PI / 180).toFixed(3) : tcpPose.ry.toFixed(1)}</span>
-            </div>
-            <div className="bg-[#1e1e24] p-2 rounded border border-[#2d2d34]">
-              <span className="text-[10px] text-blue-300 block font-bold">Rz ({angleUnit})</span>
-              <span className="text-sm font-mono font-semibold">{angleUnit === 'rad' ? (tcpPose.rz * Math.PI / 180).toFixed(3) : tcpPose.rz.toFixed(1)}</span>
-            </div>
+            {(['x', 'y', 'z', 'rx', 'ry', 'rz'] as const).map((axis) => {
+              const isLength = axis === 'x' || axis === 'y' || axis === 'z'
+              const unitLabel = isLength ? lengthUnit : angleUnit
+              const labelColor =
+                axis === 'x' || axis === 'rx'
+                  ? 'text-red-400'
+                  : axis === 'y' || axis === 'ry'
+                  ? 'text-emerald-400'
+                  : 'text-blue-400'
+
+              return (
+                <div key={axis} className="bg-[#1e1e24] p-1.5 rounded border border-[#2d2d34] flex flex-col justify-between">
+                  <span className={`text-[9px] block font-bold ${labelColor} uppercase`}>
+                    {axis} ({unitLabel})
+                  </span>
+                  <input
+                    type="text"
+                    value={localTCP[axis]}
+                    onFocus={() => setFocusedField(axis)}
+                    onChange={(e) => handleTCPChange(axis, e.target.value)}
+                    onBlur={() => handleTCPBlur(axis)}
+                    className="w-full bg-[#151519] border border-white/5 rounded px-1.5 py-0.5 text-xs text-white font-mono outline-none focus:border-blue-500/50 mt-1 text-center font-bold"
+                  />
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>
