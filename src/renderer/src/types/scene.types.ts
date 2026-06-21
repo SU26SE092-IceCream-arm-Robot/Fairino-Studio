@@ -10,13 +10,19 @@ export interface Transform3D {
   sz: number; // scale z
 }
 
+export type ModelUnit = 'mm' | 'cm' | 'm';
+export type ToolMountAxis = 'auto' | '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
+
 export interface SceneObject {
   id: string;
   name: string;
-  fileType: 'gltf' | 'glb' | 'stl';
+  fileType: 'gltf' | 'glb' | 'stl' | 'obj';
   filePath?: string; // absolute path in Electron
   url: string;       // ObjectURL for active rendering
   transform: Transform3D;
   visible: boolean;
   baseSize?: { x: number; y: number; z: number };
+  isTool?: boolean;  // true if it is an end-effector tool
+  modelUnit: ModelUnit;
+  toolMountAxis: ToolMountAxis;
 }

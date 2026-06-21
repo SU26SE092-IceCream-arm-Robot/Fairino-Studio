@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
-import { generateLua } from '../../engine/codegen/luaCodegen'
+import { generateSingleStepLua } from '../../engine/codegen/luaCodegen'
 import { parseLua } from '../../engine/codegen/luaParser'
 import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload } from 'lucide-react'
 import { electronService } from '../../services/electronService'
@@ -60,7 +60,10 @@ export default function Header() {
         fileType: obj.fileType,
         filePath: obj.filePath,
         transform: obj.transform,
-        visible: obj.visible
+        visible: obj.visible,
+        isTool: obj.isTool,
+        modelUnit: obj.modelUnit,
+        toolMountAxis: obj.toolMountAxis
       }))
     }
 
@@ -101,7 +104,20 @@ export default function Header() {
             name: obj.name,
             fileType: obj.fileType,
             filePath: obj.filePath,
-            url: url || obj.url || ''
+            url: url || obj.url || '',
+            isTool: obj.isTool,
+            modelUnit:
+              obj.modelUnit === 'mm' || obj.modelUnit === 'cm' || obj.modelUnit === 'm'
+                ? obj.modelUnit
+                : obj.fileType === 'obj' || obj.fileType === 'stl'
+                  ? 'mm'
+                  : 'm',
+            toolMountAxis:
+              obj.toolMountAxis === '+x' || obj.toolMountAxis === '-x' ||
+              obj.toolMountAxis === '+y' || obj.toolMountAxis === '-y' ||
+              obj.toolMountAxis === '+z' || obj.toolMountAxis === '-z'
+                ? obj.toolMountAxis
+                : 'auto'
           })
           
           const lastAdded = useSceneStore.getState().objects.slice(-1)[0]
@@ -173,20 +189,72 @@ export default function Header() {
 
   const handleExportLua = async () => {
     const currentSteps = useRobotStore.getState().steps
+    if (currentSteps.length === 0) {
+      alert(language === 'vi' ? 'Không có bước workflow nào để xuất!' : 'No workflow steps to export!')
+      return
+    }
+
     const projName = useRobotStore.getState().projectName
-    const luaCode = generateLua(currentSteps, projName)
-    const result = await electronService.showSaveDialog({
-      title: t('exportLua'),
-      defaultPath: `${projName}.lua`,
-      filters: [{ name: 'Lua Script Files', extensions: ['lua'] }]
+
+    // Find the active tool name
+    const activeTool = useSceneStore.getState().objects.find(o => o.isTool && o.visible)
+    const toolName = activeTool ? activeTool.name : 'None'
+
+    // Show directory selection dialog to export separate step files
+    const result = await electronService.showOpenDialog({
+      title: language === 'vi' ? 'Chọn thư mục xuất các file LUA' : 'Select Folder to Export LUA Files',
+      properties: ['openDirectory', 'createDirectory']
     })
 
-    if (!result.canceled && result.filePath) {
-      const writeRes = await electronService.writeFile(result.filePath, luaCode)
-      if (writeRes.success) {
-        alert(t('luaExportSuccess'))
+    if (!result.canceled && result.filePaths.length > 0) {
+      const dirPath = result.filePaths[0]
+      const fileWriteErrors: string[] = []
+      let stepIndex = 1
+      let idx = 0
+
+      while (idx < currentSteps.length) {
+        const step = currentSteps[idx]
+        const nextStep = currentSteps[idx + 1]
+
+        let stepCode = ''
+        let fileName = ''
+        let isLoop = false
+
+        if (step.simpleBlockRole === 'loopA' && nextStep && nextStep.simpleBlockRole === 'loopB') {
+          isLoop = true
+          // Render loop blocks in a single LUA file to preserve cycles/duration logic
+          stepCode = generateSingleStepLua(step, nextStep, projName, toolName, stepIndex)
+          const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
+          fileName = `${String(stepIndex).padStart(2, '0')}_Loop_${cleanLabel}.lua`
+        } else {
+          // Render normal steps individually
+          stepCode = generateSingleStepLua(step, null, projName, toolName, stepIndex)
+          const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
+          fileName = `${String(stepIndex).padStart(2, '0')}_${step.type}_${cleanLabel}.lua`
+        }
+
+        const fullFilePath = `${dirPath}/${fileName}`
+        const writeRes = await electronService.writeFile(fullFilePath, stepCode)
+        if (!writeRes.success) {
+          fileWriteErrors.push(`${fileName}: ${writeRes.error}`)
+        }
+
+        if (isLoop) {
+          idx += 2
+        } else {
+          idx++
+        }
+        stepIndex++
+      }
+
+      if (fileWriteErrors.length === 0) {
+        alert(language === 'vi'
+          ? `Xuất LUA thành công! Đã lưu các bước lệnh vào thư mục:\n${dirPath}`
+          : `LUA exported successfully! Saved steps to folder:\n${dirPath}`)
       } else {
-        alert(`${t('luaExportError')} ${writeRes.error}`)
+        alert(language === 'vi'
+          ? `Lỗi khi xuất các file:\n${fileWriteErrors.join('\n')}`
+          : `Error exporting files:\n${fileWriteErrors.join('\n')}`)
       }
     }
   }

@@ -5,3 +5,5 @@ out
 .eslintcache
 *.log*
 .project-memory
+*.docx
+*.SLDASM

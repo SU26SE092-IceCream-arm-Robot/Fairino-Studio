@@ -39,14 +39,34 @@ export const useSceneStore = create<SceneState>((set) => ({
 
   addObject: (obj) =>
     set((state) => {
+      // If adding a new tool, set other existing tools to invisible to avoid overlapping
+      let updatedObjects = state.objects
+      if (obj.isTool) {
+        updatedObjects = state.objects.map((o) =>
+          o.isTool ? { ...o, visible: false } : o
+        )
+      }
+
       const newObj: SceneObject = {
         ...obj,
         id: `obj_${Date.now()}`,
-        transform: { ...DEFAULT_TRANSFORM },
+        transform: obj.isTool
+          ? {
+              x: 0, // Align exactly at the robot TCP flange
+              y: 0,
+              z: 0,
+              rx: 0,
+              ry: 0,
+              rz: 0,
+              sx: 1,
+              sy: 1,
+              sz: 1
+            }
+          : { ...DEFAULT_TRANSFORM },
         visible: true
       }
       return {
-        objects: [...state.objects, newObj],
+        objects: [...updatedObjects, newObj],
         selectedObjectId: newObj.id
       }
     }),

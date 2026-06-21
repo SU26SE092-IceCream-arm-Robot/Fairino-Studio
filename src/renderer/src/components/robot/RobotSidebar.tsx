@@ -158,8 +158,20 @@ function SceneHierarchyPanel() {
           </div>
           <StaticTreeRow label="Fairino FR5" depth={2} icon={<Cpu size={12} className="text-blue-400" />} />
           <StaticTreeRow label="Base" depth={3} />
-          <StaticTreeRow label="Tool: Gripper" depth={3} disabled icon={<Wrench size={12} className="text-slate-600" />} />
-          <StaticTreeRow label="TCP: TCP_Gripper" depth={3} disabled />
+          {(() => {
+            const toolObjects = objects.filter(o => o.isTool)
+            const activeTool = toolObjects.find(t => t.visible)
+            return (
+              <>
+                {activeTool ? (
+                  <StaticTreeRow label={`Tool: ${activeTool.name}`} depth={3} icon={<Wrench size={12} className="text-blue-400" />} />
+                ) : (
+                  <StaticTreeRow label="Tool: None" depth={3} disabled icon={<Wrench size={12} className="text-slate-600" />} />
+                )}
+                <StaticTreeRow label={`TCP: ${activeTool ? 'TCP_' + activeTool.name : 'Flange'}`} depth={3} disabled={!activeTool} />
+              </>
+            )
+          })()}
         </div>
       </div>
     </div>
@@ -185,6 +197,13 @@ export default function RobotSidebar() {
 
   const isDebugHitbox = useSceneStore((state) => state.isDebugHitbox)
   const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
+  const objects = useSceneStore((state) => state.objects)
+  const updateObjectVisibility = useSceneStore((state) => state.updateObjectVisibility)
+  const setSelectedObjectId = useSceneStore((state) => state.setSelectedObjectId)
+
+  const toolObjects = objects.filter(o => o.isTool)
+  const activeTool = toolObjects.find(t => t.visible)
+  const activeToolId = activeTool ? activeTool.id : 'None'
 
   const language = useRobotStore((state) => state.language)
   const t = (key: keyof typeof translations.vi) => translations[language][key]
@@ -363,17 +382,39 @@ export default function RobotSidebar() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 opacity-55">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{t('tool')}</span>
             <div className="flex items-center gap-1.5">
               <select
-                value="Gripper"
-                disabled
-                className="h-7 w-32 rounded border border-[#2d2d34] bg-[#121214] px-2 text-xs font-semibold text-slate-500 outline-none disabled:cursor-not-allowed"
+                value={activeToolId}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (val === 'None') {
+                    toolObjects.forEach(t => updateObjectVisibility(t.id, false))
+                  } else {
+                    toolObjects.forEach(t => updateObjectVisibility(t.id, t.id === val))
+                  }
+                }}
+                className="h-7 w-32 rounded border border-[#2d2d34] bg-[#121214] px-2 text-xs font-semibold text-slate-300 outline-none hover:border-slate-500 cursor-pointer"
               >
-                <option>Gripper</option>
+                <option value="None">None</option>
+                {toolObjects.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
               </select>
-              <Settings size={13} className="text-slate-600" />
+              <button
+                disabled={activeToolId === 'None'}
+                onClick={() => {
+                  if (activeToolId !== 'None') {
+                    setActiveTab('resources')
+                    setSelectedObjectId(activeToolId)
+                  }
+                }}
+                className="p-1 hover:bg-[#2d2d34] rounded text-slate-400 hover:text-slate-200 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                title={t('configToolTooltip')}
+              >
+                <Settings size={13} />
+              </button>
             </div>
           </div>
         </div>

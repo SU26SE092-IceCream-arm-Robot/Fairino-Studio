@@ -4,13 +4,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { OBB } from 'three/examples/jsm/math/OBB.js'
 import URDFLoader from 'urdf-loader'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { solveIK } from '../../engine/robot/ikSolver'
-import { AlertTriangle, Box, Crosshair, Hand, Pause, Play, RotateCw, ShieldAlert, Square } from 'lucide-react'
+import { AlertTriangle, Box, Crosshair, Hand, Pause, Play, RotateCw, ShieldAlert, Square, Move, Maximize } from 'lucide-react'
 import { JointAngles, TCPPose, WorkflowStep } from '../../types/robot.types'
+import type { ModelUnit, ToolMountAxis } from '../../types/scene.types'
+
 
 interface SimpleWaypointScreenLabel {
   id: string
@@ -41,6 +44,8 @@ const SELF_COLLISION_PAIRS = [
   { a: 'forearm_link', b: 'wrist3_link' }
 ]
 
+const TOOL_ALLOWED_CONTACT_LINKS = ['wrist3_link']
+
 export default function Viewport3D() {
   const containerRef = useRef<HTMLDivElement>(null)
   const robotRef = useRef<any>(null)
@@ -56,6 +61,7 @@ export default function Viewport3D() {
   const simplePathGroupRef = useRef<THREE.Group | null>(null)
   const keysPressedRef = useRef<Set<string>>(new Set())
   const simpleWaypointLabelsRef = useRef<SimpleWaypointScreenLabel[]>([])
+  const wristFlangeOffsetRef = useRef(0)
   const [isRobotLoaded, setIsRobotLoaded] = useState(false)
   const [simpleWaypointLabels, setSimpleWaypointLabels] = useState<SimpleWaypointScreenLabel[]>([])
   const [pointContextMenu, setPointContextMenu] = useState<{
@@ -75,6 +81,8 @@ export default function Viewport3D() {
   
   // Cache the last user config JSON to block infinite store update loop
   const lastUserConfigRef = useRef<string>('')
+  
+  const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale'>('translate')
 
   const jointAngles = useRobotStore((state) => state.jointAngles)
   const setJointAngles = useRobotStore((state) => state.setJointAngles)
@@ -99,6 +107,136 @@ export default function Viewport3D() {
   const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
   const updateObjectBaseSize = useSceneStore((state) => state.updateObjectBaseSize)
 
+  const getModelUnitScale = (unit: ModelUnit): number => {
+    if (unit === 'mm') return 0.001
+    if (unit === 'cm') return 0.01
+    return 1
+  }
+
+  const resolveToolMountAxis = (axis: ToolMountAxis, size: THREE.Vector3): Exclude<ToolMountAxis, 'auto'> => {
+    if (axis !== 'auto') return axis
+    if (size.x >= size.y && size.x >= size.z) return '+x'
+    if (size.y >= size.x && size.y >= size.z) return '+y'
+    return '+z'
+  }
+
+  const getToolAxisVector = (axis: Exclude<ToolMountAxis, 'auto'>): THREE.Vector3 => {
+    switch (axis) {
+      case '+x': return new THREE.Vector3(1, 0, 0)
+      case '-x': return new THREE.Vector3(-1, 0, 0)
+      case '+y': return new THREE.Vector3(0, 1, 0)
+      case '-y': return new THREE.Vector3(0, -1, 0)
+      case '-z': return new THREE.Vector3(0, 0, -1)
+      default: return new THREE.Vector3(0, 0, 1)
+    }
+  }
+
+  const getToolAlignmentQuaternion = (axis: ToolMountAxis, size: THREE.Vector3): THREE.Quaternion => {
+    const resolvedAxis = resolveToolMountAxis(axis, size)
+    return new THREE.Quaternion().setFromUnitVectors(
+      getToolAxisVector(resolvedAxis),
+      new THREE.Vector3(0, 0, 1)
+    )
+  }
+
+  const alignToolGeometry = (geometry: THREE.BufferGeometry, axis: ToolMountAxis): THREE.Vector3 => {
+    geometry.computeBoundingBox()
+    const initialSize = new THREE.Vector3()
+    geometry.boundingBox?.getSize(initialSize)
+    geometry.applyQuaternion(getToolAlignmentQuaternion(axis, initialSize))
+    geometry.computeBoundingBox()
+
+    const alignedCenter = new THREE.Vector3()
+    geometry.boundingBox?.getCenter(alignedCenter)
+    geometry.translate(-alignedCenter.x, -alignedCenter.y, -(geometry.boundingBox?.min.z || 0))
+    geometry.computeBoundingBox()
+
+    const alignedSize = new THREE.Vector3()
+    geometry.boundingBox?.getSize(alignedSize)
+    return alignedSize
+  }
+
+  const alignToolObject = (
+    model: THREE.Object3D,
+    axis: ToolMountAxis
+  ): { alignedRoot: THREE.Group; size: THREE.Vector3 } => {
+    model.updateMatrixWorld(true)
+    const initialBox = new THREE.Box3().setFromObject(model)
+    const initialSize = new THREE.Vector3()
+    initialBox.getSize(initialSize)
+
+    const alignedRoot = new THREE.Group()
+    alignedRoot.name = 'tool_axis_alignment'
+    alignedRoot.quaternion.copy(getToolAlignmentQuaternion(axis, initialSize))
+    alignedRoot.add(model)
+    alignedRoot.updateMatrixWorld(true)
+
+    const alignedBox = new THREE.Box3().setFromObject(alignedRoot)
+    const alignedCenter = new THREE.Vector3()
+    alignedBox.getCenter(alignedCenter)
+    alignedRoot.position.set(-alignedCenter.x, -alignedCenter.y, -alignedBox.min.z)
+    alignedRoot.updateMatrixWorld(true)
+
+    const finalBox = new THREE.Box3().setFromObject(alignedRoot)
+    const size = new THREE.Vector3()
+    finalBox.getSize(size)
+    return { alignedRoot, size }
+  }
+
+  // Calculate the native wrist flange offset before imported tools are attached.
+  const computeWristFlangeOffset = (robot: any): number => {
+    const wristLink = robot.links?.['wrist3_link']
+    if (!wristLink) return 0
+
+    robot.updateMatrixWorld(true)
+    const invWristMatrix = new THREE.Matrix4().copy(wristLink.matrixWorld).invert()
+    const allLinkObjects = new Set<THREE.Object3D>(
+      Object.values(robot.links as Record<string, THREE.Object3D>)
+    )
+    const wristBounds = new THREE.Box3()
+
+    const collectNativeMeshes = (node: THREE.Object3D) => {
+      if (node !== wristLink && (allLinkObjects.has(node) || node.userData.isImportedTool)) return
+
+      const mesh = node as THREE.Mesh
+      if (mesh.isMesh && mesh.geometry) {
+        mesh.geometry.computeBoundingBox()
+        if (mesh.geometry.boundingBox) {
+          const relativeMatrix = new THREE.Matrix4().multiplyMatrices(invWristMatrix, mesh.matrixWorld)
+          wristBounds.union(mesh.geometry.boundingBox.clone().applyMatrix4(relativeMatrix))
+        }
+      }
+
+      node.children.forEach(collectNativeMeshes)
+    }
+
+    collectNativeMeshes(wristLink)
+    return wristBounds.isEmpty() ? 0 : Math.max(0, wristBounds.max.z)
+  }
+
+  const getWristFlangeOffset = (): number => wristFlangeOffsetRef.current
+
+  // Get active tool TCP offset local to wrist3_link
+  const getActiveToolTCP = (): THREE.Vector3 => {
+    const loadedMap = loadedObjectsRef.current
+    const zOffset = getWristFlangeOffset()
+    const activeTool = objects.find(o => o.isTool && o.visible)
+    if (!activeTool) return new THREE.Vector3(0, 0, zOffset)
+
+    const threeObj = loadedMap.get(activeTool.id)
+    if (!threeObj) return new THREE.Vector3(0, 0, zOffset)
+
+    const toolLengthMeters = (activeTool.baseSize?.z || 0) / 1000
+    const localTCP = new THREE.Vector3(0, 0, toolLengthMeters)
+
+    // Translate relative to the tool wrapper's local coordinate system (already offset by zOffset)
+    localTCP.applyEuler(threeObj.rotation)
+    localTCP.multiply(threeObj.scale)
+    localTCP.add(threeObj.position)
+
+    return localTCP
+  }
+
   // Helper to compute Forward Kinematics (FK)
   const computeFK = (angles: number[], robot: any) => {
     const jointNames = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
@@ -116,7 +254,10 @@ export default function Viewport3D() {
     
     if (baseLink && wristLink) {
       const baseMatInv = new THREE.Matrix4().copy(baseLink.matrixWorld).invert()
-      const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, wristLink.matrixWorld)
+      const localTCP = getActiveToolTCP()
+      const tcpLocalMatrix = new THREE.Matrix4().makeTranslation(localTCP.x, localTCP.y, localTCP.z)
+      const tcpWorldMatrix = new THREE.Matrix4().multiplyMatrices(wristLink.matrixWorld, tcpLocalMatrix)
+      const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, tcpWorldMatrix)
       relativeMat.decompose(pos, q, new THREE.Vector3())
     }
     
@@ -138,7 +279,7 @@ export default function Viewport3D() {
 
   // Helper to compute Inverse Kinematics (IK)
   const computeIK = (tcp: any, currentAngles: number[], robot: any, maxStep: number = 8): number[] | null => {
-    const targetPos = new THREE.Vector3(tcp.x / 1000, tcp.y / 1000, tcp.z / 1000)
+    const targetTCPPos = new THREE.Vector3(tcp.x / 1000, tcp.y / 1000, tcp.z / 1000)
     const euler = new THREE.Euler(
       (tcp.rx * Math.PI) / 180,
       (tcp.ry * Math.PI) / 180,
@@ -146,7 +287,9 @@ export default function Viewport3D() {
       'XYZ'
     )
     const targetQuat = new THREE.Quaternion().setFromEuler(euler)
-    return solveIK(targetPos, targetQuat, currentAngles as any, robot, maxStep)
+    const localTCP = getActiveToolTCP()
+    const targetWristPos = targetTCPPos.clone().sub(localTCP.clone().applyQuaternion(targetQuat))
+    return solveIK(targetWristPos, targetQuat, currentAngles as any, robot, maxStep)
   }
 
   useEffect(() => {
@@ -260,7 +403,7 @@ export default function Viewport3D() {
     // Custom DFS that stops when it enters a different link's subtree
     const collectMeshes = (node: THREE.Object3D) => {
       // Stop traversal if we've entered a child link (but allow the root linkObj itself)
-      if (node !== linkObj && allLinkObjs.has(node)) return
+      if (node !== linkObj && (allLinkObjs.has(node) || node.userData.isImportedTool)) return
 
       const mesh = node as any
       if (mesh.isMesh && mesh.geometry) {
@@ -304,6 +447,62 @@ export default function Viewport3D() {
 
     return new OBB(worldCenter, halfSize, rotMat)
   }
+
+  // Compute an OBB for an imported object without merging it into its parent robot link.
+  const computeObjectOBB = (root: THREE.Object3D): OBB | null => {
+    root.updateMatrixWorld(true)
+    const invMatrix = new THREE.Matrix4().copy(root.matrixWorld).invert()
+    const localBox = new THREE.Box3()
+    let hasMesh = false
+
+    root.traverse((node: any) => {
+      if (!node.isMesh || !node.geometry) return
+      node.geometry.computeBoundingBox()
+      if (!node.geometry.boundingBox) return
+
+      const childRelMat = new THREE.Matrix4().multiplyMatrices(invMatrix, node.matrixWorld)
+      localBox.union(node.geometry.boundingBox.clone().applyMatrix4(childRelMat))
+      hasMesh = true
+    })
+
+    if (!hasMesh || localBox.isEmpty()) return null
+
+    const localCenter = new THREE.Vector3()
+    localBox.getCenter(localCenter)
+    const worldCenter = localCenter.clone().applyMatrix4(root.matrixWorld)
+
+    const worldScale = new THREE.Vector3()
+    root.getWorldScale(worldScale)
+    const halfSize = new THREE.Vector3()
+    localBox.getSize(halfSize).multiplyScalar(0.5)
+    halfSize.set(
+      halfSize.x * Math.abs(worldScale.x),
+      halfSize.y * Math.abs(worldScale.y),
+      halfSize.z * Math.abs(worldScale.z)
+    )
+
+    const worldRotation = new THREE.Quaternion()
+    root.getWorldQuaternion(worldRotation)
+    const rotMat = new THREE.Matrix3().setFromMatrix4(
+      new THREE.Matrix4().makeRotationFromQuaternion(worldRotation)
+    )
+
+    return new OBB(worldCenter, halfSize, rotMat)
+  }
+
+  const getOBBMinY = (obb: OBB): number => {
+    let minY = Infinity
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      const corner = new THREE.Vector3(sx * obb.halfSize.x, sy * obb.halfSize.y, sz * obb.halfSize.z)
+        .applyMatrix3(obb.rotation)
+        .add(obb.center)
+      minY = Math.min(minY, corner.y)
+    }
+    return minY
+  }
+
+  const isToolContactAllowed = (linkName: string): boolean =>
+    TOOL_ALLOWED_CONTACT_LINKS.some(allowed => linkName.toLowerCase().includes(allowed))
 
   // Calculate approximate closest points between two OBBs using iterative clamp
   const getOBBDistance = (obbA: OBB, obbB: OBB) => {
@@ -1011,15 +1210,19 @@ export default function Viewport3D() {
           const scale = new THREE.Vector3()
           relativeMat.decompose(targetPos, targetQuat, scale)
 
+          // Subtract tool TCP offset to get target position of wrist3_link
+          const localTCP = getActiveToolTCP()
+          const adjustedTargetPos = targetPos.clone().sub(localTCP.clone().applyQuaternion(targetQuat))
+
           const wristWorldPos = new THREE.Vector3()
           wristLink.getWorldPosition(wristWorldPos)
           const wristLocalPos = wristWorldPos.applyMatrix4(baseMatInv)
           
-          const dist = targetPos.distanceTo(wristLocalPos)
+          const dist = adjustedTargetPos.distanceTo(wristLocalPos)
           const maxDistance = 0.08 // 8cm
-          const clampedTargetPos = targetPos.clone()
+          const clampedTargetPos = adjustedTargetPos.clone()
           if (dist > maxDistance) {
-            const dir = new THREE.Vector3().subVectors(targetPos, wristLocalPos).normalize()
+            const dir = new THREE.Vector3().subVectors(adjustedTargetPos, wristLocalPos).normalize()
             clampedTargetPos.copy(wristLocalPos).addScaledVector(dir, maxDistance)
           }
 
@@ -1082,10 +1285,13 @@ export default function Viewport3D() {
       if (selectedObjId && transformControls) {
         if (key === '1') {
           transformControls.setMode('translate')
+          setGizmoMode('translate')
         } else if (key === '2') {
           transformControls.setMode('rotate')
+          setGizmoMode('rotate')
         } else if (key === '3') {
           transformControls.setMode('scale')
+          setGizmoMode('scale')
         }
       }
     }
@@ -1125,9 +1331,10 @@ export default function Viewport3D() {
 
         scene.add(robot)
         robotRef.current = robot
+        robot.updateMatrixWorld(true)
+        wristFlangeOffsetRef.current = computeWristFlangeOffset(robot)
         setIsRobotLoaded(true)
 
-        robot.updateMatrixWorld(true)
         setTimeout(() => {
           updateRobotJoints(useRobotStore.getState().jointAngles)
         }, 50)
@@ -1304,7 +1511,7 @@ export default function Viewport3D() {
       const activeObjects: { id: string; name: string; box: THREE.Box3 }[] = []
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
-        if (storeObj && storeObj.visible) {
+        if (storeObj && storeObj.visible && !storeObj.isTool) {
           const box = new THREE.Box3().setFromObject(threeObj)
           activeObjects.push({ id, name: storeObj.name, box })
         }
@@ -1320,6 +1527,15 @@ export default function Viewport3D() {
           const obb = computeLinkOBB(linkObj, allLinkObjs)
           if (obb) linkOBBMap.set(name, obb)
         }
+      }
+
+      let activeToolHitbox: { id: string; name: string; obb: OBB } | null = null
+      for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
+        const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
+        if (!storeObj?.isTool || !storeObj.visible) continue
+        const obb = computeObjectOBB(threeObj)
+        if (obb) activeToolHitbox = { id, name: storeObj.name, obb }
+        break
       }
 
       // 3. Clear previous OBB wireframe helpers
@@ -1392,10 +1608,47 @@ export default function Viewport3D() {
             }
           }
 
-          const isColliding = isCollidingGround || isCollidingObj || isCollidingSelf
-          const isNear = isNearGround || isNearObj || isNearSelf
+          // The tool may overlap its mounting link, but must not touch any other robot link.
+          let isCollidingTool = false
+          let isNearTool = false
+          if (activeToolHitbox && !isToolContactAllowed(linkName)) {
+            isCollidingTool = obb.intersectsOBB(activeToolHitbox.obb)
+            isNearTool = !isCollidingTool &&
+              getOBBDistance(obb, activeToolHitbox.obb).distance < NEAR_DISTANCE
+          }
+
+          const isColliding = isCollidingGround || isCollidingObj || isCollidingSelf || isCollidingTool
+          const isNear = isNearGround || isNearObj || isNearSelf || isNearTool
           const color = isColliding ? 0xf43f5e : isNear ? 0xeab308 : 0x22c55e
           const wireframe = createOBBWireframe(obb, color)
+          scene.add(wireframe)
+          hitboxHelpersRef.current.push(wireframe)
+        }
+
+        if (activeToolHitbox) {
+          const toolOBB = activeToolHitbox.obb
+          const minToolY = getOBBMinY(toolOBB)
+          const collidesGround = minToolY < GROUND_Y
+          const nearGround = !collidesGround && minToolY < NEAR_DISTANCE
+          const collidesObject = activeObjects.some(obj => toolOBB.intersectsBox3(obj.box))
+          const nearObject = !collidesObject && activeObjects.some(
+            obj => getOBBToBoxDistance(toolOBB, obj.box) < NEAR_DISTANCE
+          )
+          let collidesRobot = false
+          let nearRobot = false
+          for (const [linkName, linkOBB] of linkOBBMap.entries()) {
+            if (isToolContactAllowed(linkName)) continue
+            if (toolOBB.intersectsOBB(linkOBB)) {
+              collidesRobot = true
+              break
+            }
+            if (getOBBDistance(toolOBB, linkOBB).distance < NEAR_DISTANCE) nearRobot = true
+          }
+
+          const isColliding = collidesGround || collidesObject || collidesRobot
+          const isNear = nearGround || nearObject || nearRobot
+          const color = isColliding ? 0xf43f5e : isNear ? 0xeab308 : 0x22c55e
+          const wireframe = createOBBWireframe(toolOBB, color)
           scene.add(wireframe)
           hitboxHelpersRef.current.push(wireframe)
         }
@@ -1410,6 +1663,14 @@ export default function Viewport3D() {
           if (!isColliding) {
             for (const obb of linkOBBMap.values()) {
               if (getOBBToBoxDistance(obb, obj.box) < NEAR_DISTANCE) { isNear = true; break }
+            }
+          }
+          if (activeToolHitbox) {
+            if (activeToolHitbox.obb.intersectsBox3(obj.box)) {
+              isColliding = true
+              isNear = false
+            } else if (!isColliding && getOBBToBoxDistance(activeToolHitbox.obb, obj.box) < NEAR_DISTANCE) {
+              isNear = true
             }
           }
           const color = isColliding ? 0xf43f5e : isNear ? 0xeab308 : 0x22c55e
@@ -1648,9 +1909,9 @@ export default function Viewport3D() {
       if (tcpVisualRef.current && robotRef.current) {
         const wristLink = robotRef.current.links?.['wrist3_link']
         if (wristLink) {
-          const wristWorldPos = new THREE.Vector3()
-          wristLink.getWorldPosition(wristWorldPos)
-          tcpVisualRef.current.position.copy(wristWorldPos)
+          const localTCP = getActiveToolTCP()
+          const tcpWorldPos = localTCP.clone().applyMatrix4(wristLink.matrixWorld)
+          tcpVisualRef.current.position.copy(tcpWorldPos)
           tcpVisualRef.current.updateMatrixWorld(true)
         }
 
@@ -1744,21 +2005,48 @@ export default function Viewport3D() {
       }
     }
 
-    // 4. Object Collision Detection using OBB.intersectsBox3
+    // 4. Imported object and attached tool collision detection.
     let objectCollide = false
+    let toolCollide = false
+    let activeToolOBB: OBB | null = null
+    const auxiliaryBoxes: THREE.Box3[] = []
     if (loadedObjectsRef.current.size > 0) {
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
         if (!storeObj || !storeObj.visible) continue
-        const objBox = new THREE.Box3().setFromObject(threeObj)
-        for (const obb of linkOBBMap.values()) {
-          if (obb.intersectsBox3(objBox)) { objectCollide = true; break }
+        if (storeObj.isTool) {
+          activeToolOBB = computeObjectOBB(threeObj)
+          continue
         }
-        if (objectCollide) break
+        const objBox = new THREE.Box3().setFromObject(threeObj)
+        auxiliaryBoxes.push(objBox)
+        if (!objectCollide) {
+          for (const obb of linkOBBMap.values()) {
+            if (obb.intersectsBox3(objBox)) { objectCollide = true; break }
+          }
+        }
       }
     }
 
-    return groundCollide || selfCollide || objectCollide
+    if (activeToolOBB) {
+      toolCollide = getOBBMinY(activeToolOBB) < 0.005
+
+      if (!toolCollide) {
+        for (const [linkName, linkOBB] of linkOBBMap.entries()) {
+          if (isToolContactAllowed(linkName)) continue
+          if (activeToolOBB.intersectsOBB(linkOBB)) {
+            toolCollide = true
+            break
+          }
+        }
+      }
+
+      if (!toolCollide) {
+        toolCollide = auxiliaryBoxes.some(box => activeToolOBB!.intersectsBox3(box))
+      }
+    }
+
+    return groundCollide || selfCollide || objectCollide || toolCollide
   }
 
   const candidateWouldCollide = (angles: JointAngles) => {
@@ -1789,6 +2077,8 @@ export default function Viewport3D() {
     if (!scene) return
 
     const loadedMap = loadedObjectsRef.current
+    const robot = robotRef.current
+    const wristLink = robot?.links?.['wrist3_link']
 
     // 1. Load newly added objects
     objects.forEach((obj) => {
@@ -1799,6 +2089,17 @@ export default function Viewport3D() {
             geometry.computeBoundingBox()
             const sizeVec = new THREE.Vector3()
             geometry.boundingBox?.getSize(sizeVec)
+
+            // Normalize the imported geometry to Three.js meters using the selected file unit.
+            const unitScale = getModelUnitScale(obj.modelUnit)
+            geometry.scale(unitScale, unitScale, unitScale)
+            geometry.computeBoundingBox()
+            geometry.boundingBox?.getSize(sizeVec)
+
+            if (obj.isTool) {
+              sizeVec.copy(alignToolGeometry(geometry, obj.toolMountAxis))
+            }
+
             const baseSize = {
               x: sizeVec.x * 1000,
               y: sizeVec.y * 1000,
@@ -1814,30 +2115,25 @@ export default function Viewport3D() {
             const mesh = new THREE.Mesh(geometry, material)
             mesh.castShadow = true
             mesh.receiveShadow = true
+            mesh.userData.isImportedTool = Boolean(obj.isTool)
             
-            updateThreeObjTransform(mesh, obj.transform)
+            updateThreeObjTransform(mesh, obj.transform, obj.isTool)
             mesh.visible = obj.visible
 
-            scene.add(mesh)
+            if (obj.isTool && wristLink) {
+              wristLink.add(mesh)
+            } else {
+              scene.add(mesh)
+            }
             loadedMap.set(obj.id, mesh)
             
             updateSelection()
           })
-        } else {
+        } else if (obj.fileType === 'gltf' || obj.fileType === 'glb') {
           const gltfLoader = new GLTFLoader()
           gltfLoader.load(obj.url, (gltf) => {
             const model = gltf.scene
             
-            const box = new THREE.Box3().setFromObject(model)
-            const sizeVec = new THREE.Vector3()
-            box.getSize(sizeVec)
-            const baseSize = {
-              x: sizeVec.x * 1000,
-              y: sizeVec.y * 1000,
-              z: sizeVec.z * 1000
-            }
-            updateObjectBaseSize(obj.id, baseSize)
-
             model.traverse((child: any) => {
               if (child.isMesh) {
                 child.castShadow = true
@@ -1845,11 +2141,94 @@ export default function Viewport3D() {
               }
             })
 
-            updateThreeObjTransform(model, obj.transform)
-            model.visible = obj.visible
+            const sizeVec = new THREE.Vector3()
 
-            scene.add(model)
-            loadedMap.set(obj.id, model)
+            // Normalize the imported model to Three.js meters while preserving authored transforms.
+            model.scale.multiplyScalar(getModelUnitScale(obj.modelUnit))
+            model.updateMatrixWorld(true)
+
+            const wrapper = new THREE.Group()
+            wrapper.name = `tool_wrapper_${obj.id}`
+            wrapper.userData.isImportedTool = Boolean(obj.isTool)
+
+            if (obj.isTool) {
+              const aligned = alignToolObject(model, obj.toolMountAxis)
+              sizeVec.copy(aligned.size)
+              wrapper.add(aligned.alignedRoot)
+            } else {
+              new THREE.Box3().setFromObject(model).getSize(sizeVec)
+              wrapper.add(model)
+            }
+
+            const baseSize = {
+              x: sizeVec.x * 1000,
+              y: sizeVec.y * 1000,
+              z: sizeVec.z * 1000
+            }
+            updateObjectBaseSize(obj.id, baseSize)
+
+            updateThreeObjTransform(wrapper, obj.transform, obj.isTool)
+            wrapper.visible = obj.visible
+
+            if (obj.isTool && wristLink) {
+              wristLink.add(wrapper)
+            } else {
+              scene.add(wrapper)
+            }
+            loadedMap.set(obj.id, wrapper)
+            
+            updateSelection()
+          })
+        } else if (obj.fileType === 'obj') {
+          const objLoader = new OBJLoader()
+          objLoader.load(obj.url, (model) => {
+            model.traverse((child: any) => {
+              if (child.isMesh) {
+                child.castShadow = true
+                child.receiveShadow = true
+                child.material = new THREE.MeshStandardMaterial({
+                  color: 0x90caf9,
+                  roughness: 0.5,
+                  metalness: 0.2
+                })
+              }
+            })
+
+            const sizeVec = new THREE.Vector3()
+
+            // Normalize the imported model to Three.js meters while preserving authored transforms.
+            model.scale.multiplyScalar(getModelUnitScale(obj.modelUnit))
+            model.updateMatrixWorld(true)
+
+            const wrapper = new THREE.Group()
+            wrapper.name = `tool_wrapper_${obj.id}`
+            wrapper.userData.isImportedTool = Boolean(obj.isTool)
+
+            if (obj.isTool) {
+              const aligned = alignToolObject(model, obj.toolMountAxis)
+              sizeVec.copy(aligned.size)
+              wrapper.add(aligned.alignedRoot)
+            } else {
+              new THREE.Box3().setFromObject(model).getSize(sizeVec)
+              wrapper.add(model)
+            }
+
+            const baseSize = {
+              x: sizeVec.x * 1000,
+              y: sizeVec.y * 1000,
+              z: sizeVec.z * 1000
+            }
+            updateObjectBaseSize(obj.id, baseSize)
+
+            updateThreeObjTransform(wrapper, obj.transform, obj.isTool)
+            wrapper.visible = obj.visible
+
+            if (obj.isTool && wristLink) {
+              wristLink.add(wrapper)
+            } else {
+              scene.add(wrapper)
+            }
+            loadedMap.set(obj.id, wrapper)
             
             updateSelection()
           })
@@ -1858,11 +2237,24 @@ export default function Viewport3D() {
         // 2. Update existing object transform & visibility
         const threeObj = loadedMap.get(obj.id)
         if (threeObj) {
+          // Double-check parenting when robot model is dynamically loaded
+          if (obj.isTool && wristLink) {
+            if (threeObj.parent !== wristLink) {
+              if (threeObj.parent) threeObj.parent.remove(threeObj)
+              wristLink.add(threeObj)
+            }
+          } else {
+            if (threeObj.parent !== scene) {
+              if (threeObj.parent) threeObj.parent.remove(threeObj)
+              scene.add(threeObj)
+            }
+          }
+
           const transformControls = transformControlsRef.current
           const isDraggingThis = transformControls && transformControls.dragging && transformControls.object === threeObj
           
           if (!isDraggingThis) {
-            updateThreeObjTransform(threeObj, obj.transform)
+            updateThreeObjTransform(threeObj, obj.transform, obj.isTool)
           }
           threeObj.visible = obj.visible
         }
@@ -1874,14 +2266,18 @@ export default function Viewport3D() {
       if (!objects.some((o) => o.id === id)) {
         const threeObj = loadedMap.get(id)
         if (threeObj) {
-          scene.remove(threeObj)
+          if (threeObj.parent) {
+            threeObj.parent.remove(threeObj)
+          } else {
+            scene.remove(threeObj)
+          }
           loadedMap.delete(id)
         }
       }
     }
 
     updateSelection()
-  }, [objects])
+  }, [objects, isRobotLoaded])
 
   // Update selection outline
   const updateSelection = () => {
@@ -1905,14 +2301,36 @@ export default function Viewport3D() {
   }, [selectedObjectId, objects])
 
   // Sync transform helper values (mm/degrees to meters/radians)
-  const updateThreeObjTransform = (threeObj: THREE.Object3D, t: any) => {
-    threeObj.position.set(t.x / 1000, t.y / 1000, t.z / 1000)
+  const updateThreeObjTransform = (threeObj: THREE.Object3D, t: any, isToolObj: boolean = false) => {
+    let zOffset = 0
+    const scaleBuster = new THREE.Vector3(1, 1, 1)
+
+    if (isToolObj) {
+      zOffset = getWristFlangeOffset()
+      
+      // Neutralize world scale inherited from parent (robot links)
+      const parent = threeObj.parent
+      if (parent) {
+        parent.updateMatrixWorld(true)
+        const parentWorldScale = new THREE.Vector3()
+        parent.getWorldScale(parentWorldScale)
+        
+        scaleBuster.set(
+          parentWorldScale.x > 0 ? 1 / parentWorldScale.x : 1,
+          parentWorldScale.y > 0 ? 1 / parentWorldScale.y : 1,
+          parentWorldScale.z > 0 ? 1 / parentWorldScale.z : 1
+        )
+
+      }
+    }
+
+    threeObj.position.set(t.x / 1000, t.y / 1000, (t.z / 1000) + zOffset)
     threeObj.rotation.set(
       (t.rx * Math.PI) / 180,
       (t.ry * Math.PI) / 180,
       (t.rz * Math.PI) / 180
     )
-    threeObj.scale.set(t.sx, t.sy, t.sz)
+    threeObj.scale.set(t.sx * scaleBuster.x, t.sy * scaleBuster.y, t.sz * scaleBuster.z)
   }
 
   // Highlight joint links
@@ -1995,12 +2413,12 @@ export default function Viewport3D() {
       if (!transformControls.dragging) {
         const wristLink = robot.links['wrist3_link']
         if (wristLink) {
-          const wristWorldPos = new THREE.Vector3()
+          const localTCP = getActiveToolTCP()
+          const tcpWorldPos = localTCP.clone().applyMatrix4(wristLink.matrixWorld)
           const wristWorldQuat = new THREE.Quaternion()
-          wristLink.getWorldPosition(wristWorldPos)
           wristLink.getWorldQuaternion(wristWorldQuat)
 
-          dummyTarget.position.copy(wristWorldPos)
+          dummyTarget.position.copy(tcpWorldPos)
           dummyTarget.quaternion.copy(wristWorldQuat)
           dummyTarget.updateMatrixWorld(true)
         }
@@ -2046,6 +2464,7 @@ export default function Viewport3D() {
         transformControls.showX = true
         transformControls.showY = true
         transformControls.showZ = true
+        transformControls.setMode(gizmoMode)
         
         // Only attach if it's not already attached to prevent resetting the dragging state offset
         if (transformControls.object !== threeObj) {
@@ -2061,7 +2480,7 @@ export default function Viewport3D() {
       transformControls.detach()
       transformControls.getHelper().visible = false
     }
-  }, [isIKMode, isRobotLoaded, isPlaying, selectedJointName, selectedObjectId])
+  }, [isIKMode, isRobotLoaded, isPlaying, selectedJointName, selectedObjectId, gizmoMode])
 
   // Update robot joints when jointAngles state changes
   useEffect(() => {
@@ -2091,7 +2510,11 @@ export default function Viewport3D() {
 
     if (baseLink && wristLink) {
       const baseMatInv = new THREE.Matrix4().copy(baseLink.matrixWorld).invert()
-      const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, wristLink.matrixWorld)
+      
+      const localTCP = getActiveToolTCP()
+      const tcpLocalMatrix = new THREE.Matrix4().makeTranslation(localTCP.x, localTCP.y, localTCP.z)
+      const tcpWorldMatrix = new THREE.Matrix4().multiplyMatrices(wristLink.matrixWorld, tcpLocalMatrix)
+      const relativeMat = new THREE.Matrix4().multiplyMatrices(baseMatInv, tcpWorldMatrix)
 
       const pos = new THREE.Vector3()
       const q = new THREE.Quaternion()
@@ -2109,19 +2532,18 @@ export default function Viewport3D() {
 
       setTCPPose({ x, y, z, rx, ry, rz })
 
-      const wristWorldPos = new THREE.Vector3()
-      const wristWorldQuat = new THREE.Quaternion()
-      wristLink.getWorldPosition(wristWorldPos)
-      wristLink.getWorldQuaternion(wristWorldQuat)
+      const tcpWorldPos = new THREE.Vector3()
+      const tcpWorldQuat = new THREE.Quaternion()
+      tcpWorldMatrix.decompose(tcpWorldPos, tcpWorldQuat, new THREE.Vector3())
 
       if (dummyTarget && !transformControlsRef.current?.dragging) {
-        dummyTarget.position.copy(wristWorldPos)
-        dummyTarget.quaternion.copy(wristWorldQuat)
+        dummyTarget.position.copy(tcpWorldPos)
+        dummyTarget.quaternion.copy(tcpWorldQuat)
         dummyTarget.updateMatrixWorld(true)
       }
 
       if (tcpVisualRef.current) {
-        tcpVisualRef.current.position.copy(wristWorldPos)
+        tcpVisualRef.current.position.copy(tcpWorldPos)
         tcpVisualRef.current.updateMatrixWorld(true)
       }
     }
@@ -2234,6 +2656,13 @@ export default function Viewport3D() {
     setPlaying(false)
     setCurrentStepIndex(0)
     setSelectedStepId(null)
+  }
+
+  const changeGizmoMode = (mode: 'translate' | 'rotate' | 'scale') => {
+    setGizmoMode(mode)
+    if (transformControlsRef.current) {
+      transformControlsRef.current.setMode(mode)
+    }
   }
 
   return (
@@ -2355,6 +2784,42 @@ export default function Viewport3D() {
       ))}
 
       <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 rounded-lg border border-[#2d2d34] bg-[#101014]/90 p-1.5 shadow-2xl backdrop-blur-md">
+        {selectedObjectId && (
+          <>
+            <button
+              onClick={() => changeGizmoMode('translate')}
+              className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+                gizmoMode === 'translate' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+              }`}
+              title={language === 'vi' ? 'Di chuyển vật thể (Phím 1)' : 'Move Object (Key 1)'}
+              aria-label="Translate mode"
+            >
+              <Move size={16} />
+            </button>
+            <button
+              onClick={() => changeGizmoMode('rotate')}
+              className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+                gizmoMode === 'rotate' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+              }`}
+              title={language === 'vi' ? 'Xoay vật thể (Phím 2)' : 'Rotate Object (Key 2)'}
+              aria-label="Rotate mode"
+            >
+              <RotateCw size={15} />
+            </button>
+            <button
+              onClick={() => changeGizmoMode('scale')}
+              className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${
+                gizmoMode === 'scale' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
+              }`}
+              title={language === 'vi' ? 'Thu phóng vật thể (Phím 3)' : 'Scale Object (Key 3)'}
+              aria-label="Scale mode"
+            >
+              <Maximize size={15} />
+            </button>
+            <div className="mx-1 h-6 w-px bg-white/10" />
+          </>
+        )}
+
         <button
           onClick={() => setIKMode(false)}
           className={`h-10 w-10 rounded-md flex items-center justify-center transition cursor-pointer ${

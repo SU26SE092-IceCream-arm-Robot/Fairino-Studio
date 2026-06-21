@@ -2,11 +2,18 @@ import React, { useRef } from 'react'
 import { useSceneStore } from '../../store/sceneStore'
 import { useRobotStore } from '../../store/robotStore'
 import { Trash2, Eye, EyeOff, Upload, Settings, Plus } from 'lucide-react'
-import { Transform3D } from '../../types/scene.types'
+import type { ModelUnit, ToolMountAxis, Transform3D } from '../../types/scene.types'
 import { translations } from '../../i18n/translations'
 
 export default function ScenePanel({ compact = false }: { compact?: boolean }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [importFile, setImportFile] = React.useState<{
+    file: File
+    name: string
+    extension: string
+    modelUnit: ModelUnit
+    toolMountAxis: ToolMountAxis
+  } | null>(null)
   const objects = useSceneStore((state) => state.objects)
   const addObject = useSceneStore((state) => state.addObject)
   const removeObject = useSceneStore((state) => state.removeObject)
@@ -29,20 +36,32 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
     const name = file.name.split('.').slice(0, -1).join('.')
     const extension = file.name.split('.').pop()?.toLowerCase()
     
-    if (extension !== 'gltf' && extension !== 'glb' && extension !== 'stl') {
+    if (extension !== 'gltf' && extension !== 'glb' && extension !== 'stl' && extension !== 'obj') {
       alert(t('importFormatError'))
       return
     }
 
-    const url = URL.createObjectURL(file)
-    const filePath = (file as any).path
+    const modelUnit: ModelUnit = extension === 'obj' || extension === 'stl' ? 'mm' : 'm'
+    setImportFile({ file, name, extension, modelUnit, toolMountAxis: 'auto' })
+  }
+
+  const handleConfirmImport = (isTool: boolean) => {
+    if (!importFile) return
+
+    const url = URL.createObjectURL(importFile.file)
+    const filePath = (importFile.file as any).path
 
     addObject({
-      name: name || 'Unnamed Object',
-      fileType: extension as 'gltf' | 'glb' | 'stl',
+      name: importFile.name || 'Unnamed Object',
+      fileType: importFile.extension as 'gltf' | 'glb' | 'stl' | 'obj',
       filePath,
-      url
+      url,
+      isTool,
+      modelUnit: importFile.modelUnit,
+      toolMountAxis: importFile.toolMountAxis
     })
+
+    setImportFile(null)
 
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -64,9 +83,107 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept=".gltf,.glb,.stl"
+        accept=".gltf,.glb,.stl,.obj"
         className="hidden"
       />
+
+      {/* Import Type Selection Dialog Modal */}
+      {importFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm rounded-xl border border-[#2d2d34] bg-[#141417] p-5 shadow-2xl animate-in fade-in zoom-in duration-200 text-slate-200">
+            <h3 className="text-sm font-bold text-white mb-2">
+              {t('importTypeTitle')}
+            </h3>
+            <p className="text-[11px] text-slate-400 mb-4">
+              {t('importTypeDesc')}
+            </p>
+
+            <div className="mb-4">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                {t('modelUnitTitle')}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(['mm', 'cm', 'm'] as ModelUnit[]).map((unit) => (
+                  <button
+                    key={unit}
+                    type="button"
+                    onClick={() => setImportFile((current) => current ? { ...current, modelUnit: unit } : current)}
+                    className={`rounded border px-3 py-2 text-xs font-bold uppercase transition cursor-pointer ${
+                      importFile.modelUnit === unit
+                        ? 'border-blue-500 bg-blue-600/20 text-blue-300'
+                        : 'border-[#2d2d34] bg-[#1e1e24] text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                    }`}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-500">{t('modelUnitDesc')}</p>
+            </div>
+
+            <div className="mb-4">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                {t('toolAxisTitle')}
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {(['auto', '+x', '-x', '+y', '-y', '+z', '-z'] as ToolMountAxis[]).map((axis) => (
+                  <button
+                    key={axis}
+                    type="button"
+                    onClick={() => setImportFile((current) => current ? { ...current, toolMountAxis: axis } : current)}
+                    className={`rounded border px-2 py-1.5 text-[10px] font-bold uppercase transition cursor-pointer ${
+                      importFile.toolMountAxis === axis
+                        ? 'border-blue-500 bg-blue-600/20 text-blue-300'
+                        : 'border-[#2d2d34] bg-[#1e1e24] text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                    }`}
+                  >
+                    {axis}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-500">{t('toolAxisDesc')}</p>
+            </div>
+            
+            <div className="space-y-2 mb-6">
+              <button
+                onClick={() => handleConfirmImport(false)}
+                className="w-full p-3 rounded-lg border border-[#2d2d34] bg-[#1e1e24] hover:bg-[#25252d] text-left transition hover:border-blue-500 cursor-pointer block"
+              >
+                <div className="text-xs font-bold text-white">
+                  {t('normalObject')}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {t('normalObjectDesc')}
+                </div>
+              </button>
+              
+              <button
+                onClick={() => handleConfirmImport(true)}
+                className="w-full p-3 rounded-lg border border-[#2d2d34] bg-[#1e1e24] hover:bg-[#25252d] text-left transition hover:border-blue-500 cursor-pointer block"
+              >
+                <div className="text-xs font-bold text-blue-400">
+                  {t('gripperTool')}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {t('gripperToolDesc')}
+                </div>
+              </button>
+            </div>
+            
+            <div className="flex justify-end">
+              <button
+                onClick={() => {
+                  setImportFile(null)
+                  if (fileInputRef.current) fileInputRef.current.value = ''
+                }}
+                className="px-4 py-2 rounded bg-transparent hover:bg-slate-800 text-xs font-semibold text-slate-400 transition cursor-pointer"
+              >
+                {language === 'vi' ? 'Hủy' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Objects List */}
       <div className={`${compact ? 'h-[134px] shrink-0 p-2 space-y-1.5' : 'p-4 space-y-3 flex-1'} thin-scrollbar overflow-y-auto min-h-0`}>
