@@ -1,19 +1,23 @@
 import { useEffect, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { useRobotStore } from '../../store/robotStore'
+import { useSceneStore } from '../../store/sceneStore'
 import { generateLua } from '../../engine/codegen/luaCodegen'
 import { Code, Copy, Check } from 'lucide-react'
 
 export default function CodePanel() {
   const steps = useRobotStore((state) => state.steps)
   const projectName = useRobotStore((state) => state.projectName)
+  const objects = useSceneStore((state) => state.objects)
   const [luaCode, setLuaCode] = useState('')
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    const code = generateLua(steps, projectName)
+    const activeTool = objects.find((o) => o.isTool && o.visible)
+    const activeToolName = activeTool ? activeTool.name : 'None'
+    const code = generateLua(steps, projectName, activeToolName)
     setCodeText(code)
-  }, [steps, projectName])
+  }, [steps, projectName, objects])
 
   const setCodeText = (code: string) => {
     setLuaCode(code)

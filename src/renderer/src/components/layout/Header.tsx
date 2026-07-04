@@ -31,7 +31,7 @@ export default function Header() {
     if (confirm(t('newProjectConfirm'))) {
       reorderSteps([])
       setJointAngles([0, 0, 0, 0, 0, 0])
-      setProjectName('coffee_machine_workflow')
+      setProjectName('untitled')
       setCurrentFilePath(null)
       setSimpleBlocklyWorkspace(null)
       setProjectModules([])
@@ -263,30 +263,107 @@ export default function Header() {
     const result = await electronService.showOpenDialog({
       title: t('importLua'),
       filters: [{ name: 'Lua Script Files', extensions: ['lua'] }],
-      properties: ['openFile']
+      properties: ['openFile', 'multiSelections']
     })
 
     if (!result.canceled && result.filePaths.length > 0) {
-      const filePath = result.filePaths[0]
-      const readRes = await electronService.readFile(filePath)
-      if (readRes.success && readRes.content) {
-        try {
-          const { steps: parsedSteps, projectName: parsedProjName } = parseLua(readRes.content)
-          if (parsedSteps.length === 0) {
-            alert(`${t('luaImportError')} ${language === 'vi' ? 'Không tìm thấy bước lệnh hợp lệ nào trong file LUA.' : 'No valid command steps found in the LUA file.'}`)
-            return
+      // Sort file paths numerically/alphabetically based on filename to ensure correct workflow step order
+      const sortedPaths = [...result.filePaths].sort((a, b) => {
+        const fileA = a.split(/[/\\]/).pop() || ''
+        const fileB = b.split(/[/\\]/).pop() || ''
+        return fileA.localeCompare(fileB, undefined, { numeric: true, sensitivity: 'base' })
+      })
+
+      const allCombinedSteps: any[] = []
+      let lastProjName = ''
+      const errors: string[] = []
+
+      for (const filePath of sortedPaths) {
+        const readRes = await electronService.readFile(filePath)
+        if (readRes.success && readRes.content) {
+          try {
+            const { steps: parsedSteps, projectName: parsedProjName } = parseLua(readRes.content)
+            if (parsedSteps.length > 0) {
+              allCombinedSteps.push(...parsedSteps)
+              if (parsedProjName && parsedProjName !== 'Imported Project' && parsedProjName !== 'Unnamed Project') {
+                lastProjName = parsedProjName
+              }
+            }
+          } catch (e: any) {
+            const fileName = filePath.split(/[/\\]/).pop() || ''
+            errors.push(`${fileName}: ${e.message}`)
           }
-          
-          reorderSteps(parsedSteps)
-          if (parsedProjName) {
-            setProjectName(parsedProjName)
-          }
-          alert(t('luaImportSuccess'))
-        } catch (e: any) {
-          alert(`${t('luaImportError')} ${e.message}`)
+        } else {
+          const fileName = filePath.split(/[/\\]/).pop() || ''
+          errors.push(`${fileName}: ${readRes.error}`)
         }
+      }
+
+      if (allCombinedSteps.length === 0) {
+        alert(`${t('luaImportError')} ${
+          language === 'vi'
+            ? 'Không tìm thấy bước lệnh hợp lệ nào trong các file LUA.'
+            : 'No valid command steps found in the LUA files.'
+        }${errors.length > 0 ? '\n\n' + errors.join('\n') : ''}`)
+        return
+      }
+
+      // Restore visual block pairing for Simple (Scratch) mode
+      let stepIdx = 0
+      while (stepIdx < allCombinedSteps.length) {
+        const step = allCombinedSteps[stepIdx]
+        const next = allCombinedSteps[stepIdx + 1]
+
+        if (step.simpleBlockRole === 'loopA') {
+          if (!step.tcpPose) step.tcpPose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+          if (next && next.simpleBlockRole === 'loopB') {
+            if (!next.tcpPose) next.tcpPose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+          }
+          stepIdx += 2
+          continue
+        }
+
+        if (
+          (step.type === 'MoveJ' || step.type === 'MoveL') &&
+          next &&
+          (next.type === 'MoveJ' || next.type === 'MoveL') &&
+          !step.simpleBlockRole &&
+          !next.simpleBlockRole
+        ) {
+          const blockId = `block_imported_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`
+          
+          step.simpleBlockId = blockId
+          step.simpleBlockRole = 'moveA'
+          if (!step.tcpPose) {
+            step.tcpPose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+          }
+
+          next.simpleBlockId = blockId
+          next.simpleBlockRole = 'moveB'
+          if (!next.tcpPose) {
+            next.tcpPose = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+          }
+
+          stepIdx += 2
+          continue
+        }
+
+        stepIdx++
+      }
+
+      reorderSteps(allCombinedSteps)
+      if (lastProjName) {
+        setProjectName(lastProjName)
+      }
+
+      if (errors.length > 0) {
+        alert(
+          language === 'vi'
+            ? `Nhập LUA thành công một phần! Có lỗi ở một số file:\n${errors.join('\n')}`
+            : `LUA imported partially! Errors in some files:\n${errors.join('\n')}`
+        )
       } else {
-        alert(`${t('luaImportError')} ${readRes.error}`)
+        alert(t('luaImportSuccess'))
       }
     }
   }
@@ -334,23 +411,6 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Project Name Editor */}
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          value={projectName}
-          onChange={(e) => setProjectName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-          placeholder={t('projectNamePlaceholder')}
-          title="Tên dự án (chỉ cho phép chữ cái, số, gạch dưới và gạch ngang)"
-          className="bg-[#1e1e24] hover:bg-[#25252d] focus:bg-[#2d2d38] border border-[#2d2d34] focus:border-blue-500 rounded px-2.5 py-1 text-xs font-semibold text-white outline-none w-48 text-center transition"
-        />
-        {currentFilePath && (
-          <span className="text-[9px] text-slate-500 truncate max-w-[150px]" title={currentFilePath}>
-            ({currentFilePath.split('\\').pop()})
-          </span>
-        )}
-      </div>
-
       {/* Collision Global Alert */}
       {collisionWarning && (
         <div className="flex items-center gap-1.5 px-3 py-1 bg-rose-950/40 border border-rose-500/35 rounded-full text-rose-400 text-xs font-bold animate-pulse">
@@ -360,6 +420,25 @@ export default function Header() {
 
       {/* Action Buttons & Language Switcher */}
       <div className="flex items-center gap-4">
+        {/* Project Name Editor */}
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+            placeholder={t('projectNamePlaceholder')}
+            title="Tên dự án (chỉ cho phép chữ cái, số, gạch dưới và gạch ngang)"
+            className="bg-[#1e1e24] hover:bg-[#25252d] focus:bg-[#2d2d38] border border-[#2d2d34] focus:border-blue-500 rounded px-2.5 py-1 text-xs font-semibold text-white outline-none w-48 text-center transition"
+          />
+          {currentFilePath && (
+            <span className="text-[9px] text-slate-500 truncate max-w-[120px]" title={currentFilePath}>
+              ({currentFilePath.split('\\').pop()})
+            </span>
+          )}
+        </div>
+
+        <div className="w-px h-5 bg-[#2d2d34]"></div>
+
         {/* Language selector */}
         <div className="flex items-center gap-1.5 border border-[#2d2d34] rounded-lg px-2.5 py-1.5 bg-[#1e1e24] hover:bg-[#25252d] hover:border-slate-500 transition">
           <Globe size={13} className="text-slate-400" />

@@ -77,7 +77,7 @@ export const useRobotStore = create<RobotState>((set) => ({
   tcpPose: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 },
   isIKMode: false,
   
-  projectName: 'coffee_machine_workflow',
+  projectName: 'untitled',
   currentFilePath: null,
   
   steps: [],
