@@ -7,6 +7,7 @@ export interface ElectronService {
   showSaveDialog: (options: any) => Promise<{ canceled: boolean; filePath?: string }>
   showOpenDialog: (options: any) => Promise<{ canceled: boolean; filePaths: string[] }>
   writeFile: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
+  writeBinaryFile: (filePath: string, content: Uint8Array) => Promise<{ success: boolean; error?: string }>
   readFile: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>
   readBlockLibrary: () => Promise<{ success: boolean; content?: string; error?: string }>
   writeBlockLibrary: (content: string) => Promise<{ success: boolean; error?: string }>
@@ -57,6 +58,31 @@ export const electronService: ElectronService = {
       return { success: true }
     } catch (e: any) {
       return { success: false, error: e.message }
+    }
+  },
+
+  writeBinaryFile: async (filePath, content) => {
+    if (isElectronEnv) {
+      let binary = ''
+      const chunkSize = 0x8000
+      for (let offset = 0; offset < content.length; offset += chunkSize) {
+        binary += String.fromCharCode(...content.subarray(offset, offset + chunkSize))
+      }
+      return window.api.writeBinaryFile(filePath, btoa(binary))
+    }
+    try {
+      const blob = new Blob([content as BlobPart], { type: 'application/zip' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filePath.split(/[\\/]/).pop() || 'icebot-export.zip'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
     }
   },
 

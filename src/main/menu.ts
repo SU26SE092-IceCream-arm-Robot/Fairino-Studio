@@ -49,6 +49,12 @@ export function setupMenu(mainWindow: BrowserWindow): void {
             mainWindow.webContents.send('menu-action', 'export-lua')
           }
         },
+        {
+          label: 'Xuất file LUA riêng lẻ (Nâng cao)...',
+          click: () => {
+            mainWindow.webContents.send('menu-action', 'export-lua-files')
+          }
+        },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }
       ]

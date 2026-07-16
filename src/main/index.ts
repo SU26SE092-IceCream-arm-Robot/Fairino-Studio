@@ -104,6 +104,15 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('write-binary-file', async (_, filePath, base64Content) => {
+    try {
+      await fs.writeFile(filePath, Buffer.from(base64Content, 'base64'))
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
   ipcMain.handle('read-file', async (_, filePath) => {
     try {
       const content = await fs.readFile(filePath, 'utf-8')

@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { generateSingleStepLua } from '../../engine/codegen/luaCodegen'
+import { createIceBotArtifactSidecar } from '../../engine/codegen/icebotArtifactSidecar'
+import { createIceBotExportBundle, type IceBotExportArtifact } from '../../engine/codegen/icebotExportBundle'
 import { parseLua } from '../../engine/codegen/luaParser'
 import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload } from 'lucide-react'
 import { electronService } from '../../services/electronService'
@@ -187,76 +189,90 @@ export default function Header() {
     }
   }
 
-  const handleExportLua = async () => {
+  const buildIceBotExportArtifacts = (): { projectName: string; artifacts: IceBotExportArtifact[] } | null => {
     const currentSteps = useRobotStore.getState().steps
     if (currentSteps.length === 0) {
       alert(language === 'vi' ? 'Không có bước workflow nào để xuất!' : 'No workflow steps to export!')
-      return
+      return null
     }
 
     const projName = useRobotStore.getState().projectName
-
-    // Find the active tool name
     const activeTool = useSceneStore.getState().objects.find(o => o.isTool && o.visible)
     const toolName = activeTool ? activeTool.name : 'None'
+    const artifacts: IceBotExportArtifact[] = []
+    let stepIndex = 1
+    let idx = 0
+    while (idx < currentSteps.length) {
+      const step = currentSteps[idx]
+      const nextStep = currentSteps[idx + 1]
+      const isLoop = step.simpleBlockRole === 'loopA' && nextStep?.simpleBlockRole === 'loopB'
+      const stepCode = generateSingleStepLua(step, isLoop ? nextStep : null, projName, toolName, stepIndex)
+      const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const fileName = isLoop
+        ? `${String(stepIndex).padStart(2, '0')}_Loop_${cleanLabel}.lua`
+        : `${String(stepIndex).padStart(2, '0')}_${step.type}_${cleanLabel}.lua`
+      const sidecarFileName = fileName.replace(/\.lua$/i, '.icebot.json')
+      artifacts.push({
+        fileName,
+        lua: stepCode,
+        sidecarFileName,
+        sidecar: createIceBotArtifactSidecar(step, fileName, stepIndex),
+        runOrder: stepIndex
+      })
+      idx += isLoop ? 2 : 1
+      stepIndex++
+    }
+    return { projectName: projName, artifacts }
+  }
 
-    // Show directory selection dialog to export separate step files
+  const handleExportLua = async () => {
+    const exportData = buildIceBotExportArtifacts()
+    if (!exportData) return
+    const defaultName = `${exportData.projectName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'icebot'}-export.zip`
+    const result = await electronService.showSaveDialog({
+      title: language === 'vi' ? 'Xuất gói IceBot' : 'Export IceBot Bundle',
+      defaultPath: defaultName,
+      filters: [{ name: 'IceBot Export Bundle', extensions: ['zip'] }]
+    })
+    if (result.canceled || !result.filePath) return
+
+    try {
+      const bundle = createIceBotExportBundle(exportData.projectName, exportData.artifacts)
+      const writeResult = await electronService.writeBinaryFile(result.filePath, bundle)
+      if (!writeResult.success) throw new Error(writeResult.error || 'Unknown write error')
+      alert(language === 'vi'
+        ? `Xuất gói IceBot thành công:\n${result.filePath}`
+        : `IceBot bundle exported successfully:\n${result.filePath}`)
+    } catch (error: any) {
+      alert(language === 'vi'
+        ? `Lỗi khi xuất gói IceBot:\n${error.message}`
+        : `Error exporting IceBot bundle:\n${error.message}`)
+    }
+  }
+
+  const handleExportLuaFiles = async () => {
+    const exportData = buildIceBotExportArtifacts()
+    if (!exportData) return
     const result = await electronService.showOpenDialog({
-      title: language === 'vi' ? 'Chọn thư mục xuất các file LUA' : 'Select Folder to Export LUA Files',
+      title: language === 'vi' ? 'Chọn thư mục xuất file LUA riêng lẻ' : 'Select Folder for Individual LUA Files',
       properties: ['openDirectory', 'createDirectory']
     })
+    if (result.canceled || result.filePaths.length === 0) return
 
-    if (!result.canceled && result.filePaths.length > 0) {
-      const dirPath = result.filePaths[0]
-      const fileWriteErrors: string[] = []
-      let stepIndex = 1
-      let idx = 0
-
-      while (idx < currentSteps.length) {
-        const step = currentSteps[idx]
-        const nextStep = currentSteps[idx + 1]
-
-        let stepCode = ''
-        let fileName = ''
-        let isLoop = false
-
-        if (step.simpleBlockRole === 'loopA' && nextStep && nextStep.simpleBlockRole === 'loopB') {
-          isLoop = true
-          // Render loop blocks in a single LUA file to preserve cycles/duration logic
-          stepCode = generateSingleStepLua(step, nextStep, projName, toolName, stepIndex)
-          const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
-          fileName = `${String(stepIndex).padStart(2, '0')}_Loop_${cleanLabel}.lua`
-        } else {
-          // Render normal steps individually
-          stepCode = generateSingleStepLua(step, null, projName, toolName, stepIndex)
-          const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
-          fileName = `${String(stepIndex).padStart(2, '0')}_${step.type}_${cleanLabel}.lua`
-        }
-
-        const fullFilePath = `${dirPath}/${fileName}`
-        const writeRes = await electronService.writeFile(fullFilePath, stepCode)
-        if (!writeRes.success) {
-          fileWriteErrors.push(`${fileName}: ${writeRes.error}`)
-        }
-
-        if (isLoop) {
-          idx += 2
-        } else {
-          idx++
-        }
-        stepIndex++
-      }
-
-      if (fileWriteErrors.length === 0) {
-        alert(language === 'vi'
-          ? `Xuất LUA thành công! Đã lưu các bước lệnh vào thư mục:\n${dirPath}`
-          : `LUA exported successfully! Saved steps to folder:\n${dirPath}`)
-      } else {
-        alert(language === 'vi'
-          ? `Lỗi khi xuất các file:\n${fileWriteErrors.join('\n')}`
-          : `Error exporting files:\n${fileWriteErrors.join('\n')}`)
-      }
+    const dirPath = result.filePaths[0]
+    const errors: string[] = []
+    for (const artifact of exportData.artifacts) {
+      const luaResult = await electronService.writeFile(`${dirPath}/${artifact.fileName}`, artifact.lua)
+      if (!luaResult.success) errors.push(`${artifact.fileName}: ${luaResult.error}`)
+      const sidecarResult = await electronService.writeFile(
+        `${dirPath}/${artifact.sidecarFileName}`,
+        JSON.stringify(artifact.sidecar, null, 2)
+      )
+      if (!sidecarResult.success) errors.push(`${artifact.sidecarFileName}: ${sidecarResult.error}`)
     }
+    alert(errors.length === 0
+      ? (language === 'vi' ? `Đã xuất file riêng lẻ vào:\n${dirPath}` : `Individual files exported to:\n${dirPath}`)
+      : (language === 'vi' ? `Có lỗi khi xuất file:\n${errors.join('\n')}` : `File export errors:\n${errors.join('\n')}`))
   }
 
   const handleImportLua = async () => {
@@ -387,6 +403,9 @@ export default function Header() {
             break
           case 'export-lua':
             handleExportLua()
+            break
+          case 'export-lua-files':
+            handleExportLuaFiles()
             break
           case 'import-lua':
             handleImportLua()
