@@ -140,10 +140,16 @@ export const useRobotStore = create<RobotState>((set) => ({
   reorderSteps: (newSteps) => set({ steps: newSteps, simpleWorkspaceDirtyFromSteps: true }),
 
   syncStepsFromBlockly: (steps, workspaceJson) =>
-    set({
-      steps,
-      simpleBlocklyWorkspace: workspaceJson,
-      simpleWorkspaceDirtyFromSteps: false
+    set((state) => {
+      const previousById = new Map(state.steps.map((step) => [step.id, step]))
+      return {
+        steps: steps.map((step) => ({
+          ...step,
+          icebotSemantics: previousById.get(step.id)?.icebotSemantics
+        })),
+        simpleBlocklyWorkspace: workspaceJson,
+        simpleWorkspaceDirtyFromSteps: false
+      }
     }),
 
   setSimpleBlocklyWorkspace: (json) => set({ simpleBlocklyWorkspace: json }),

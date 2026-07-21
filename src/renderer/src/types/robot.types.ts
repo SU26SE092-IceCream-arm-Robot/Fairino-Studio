@@ -22,6 +22,28 @@ export type StepType =
   | 'MoveTCP'
   | 'Comment';
 
+export type IceBotEffectKind = 'System' | 'Motion' | 'Ingredient' | 'Option'
+export type IceBotQuantityMode = 'None' | 'FixedInArtifact'
+export type IceBotExecutionPhase = 'PREPARE' | 'BASE' | 'OPTION' | 'DELIVER' | 'CLEANUP'
+
+export interface IceBotDeclaredEffect {
+  effectCode: string
+  effectKind: IceBotEffectKind
+  ingredientCode?: string
+  optionCode?: string
+  quantityMode: IceBotQuantityMode
+  fixedQuantity?: number
+  unit?: string
+  requiredWorkcellCapabilityCode?: string
+}
+
+export interface IceBotStepSemantics {
+  phase: IceBotExecutionPhase
+  effects: IceBotDeclaredEffect[]
+  beforeEffectCodes?: string[]
+  afterEffectCodes?: string[]
+}
+
 export interface WorkflowStep {
   id: string;
   type: StepType;
@@ -50,6 +72,8 @@ export interface WorkflowStep {
   simpleBlockRole?: 'moveA' | 'moveB' | 'loopA' | 'loopB';
   loopType?: 'cycles' | 'seconds';
   loopValue?: number;
+  // Explicit IceBot production semantics. Never inferred from the display label.
+  icebotSemantics?: IceBotStepSemantics;
 }
 
 export type SimpleLibraryScope = 'project' | 'app' | 'builtin';

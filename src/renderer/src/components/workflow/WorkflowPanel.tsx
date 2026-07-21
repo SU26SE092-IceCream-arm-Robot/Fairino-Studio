@@ -3,9 +3,11 @@ import { WorkflowStep } from '../../types/robot.types'
 import { Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles, HelpCircle } from 'lucide-react'
 import BlockWorkspace from './BlockWorkspace'
 import { translations } from '../../i18n/translations'
+import ArtifactSemanticsEditor from './ArtifactSemanticsEditor'
+import type { JSX } from 'react'
 
 // Helper component for descriptive tooltips on technical terms
-const InfoTooltip = ({ text }: { text: string }) => (
+const InfoTooltip = ({ text }: { text: string }): JSX.Element => (
   <div className="relative group inline-block align-middle select-none shrink-0" onClick={e => e.stopPropagation()}>
     <HelpCircle size={11} className="text-slate-400 hover:text-slate-200 cursor-help transition" />
     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-56 bg-[#121214]/95 border border-[#2d2d34] text-[10px] text-slate-300 p-2.5 rounded-lg shadow-2xl backdrop-blur-md z-[100] pointer-events-none font-normal leading-relaxed normal-case">
@@ -15,7 +17,7 @@ const InfoTooltip = ({ text }: { text: string }) => (
   </div>
 )
 
-export default function WorkflowPanel() {
+export default function WorkflowPanel(): JSX.Element {
   const steps = useRobotStore((state) => state.steps)
   const addStep = useRobotStore((state) => state.addStep)
   const removeStep = useRobotStore((state) => state.removeStep)
@@ -34,13 +36,13 @@ export default function WorkflowPanel() {
 
   // Language translation helper
   const language = useRobotStore((state) => state.language)
-  const t = (key: keyof typeof translations.vi) => translations[language][key]
+  const t = (key: keyof typeof translations.vi): string => translations[language][key]
 
   // Simulation states
   const isPlaying = useRobotStore((state) => state.isPlaying)
   const currentStepIndex = useRobotStore((state) => state.currentStepIndex)
 
-  const handleRecordWaypoint = (type: 'MoveJ' | 'MoveL') => {
+  const handleRecordWaypoint = (type: 'MoveJ' | 'MoveL'): void => {
     const pointNum = steps.filter(s => s.type === 'MoveJ' || s.type === 'MoveL').length + 1
     const label = `${type} - ${language === 'vi' ? 'Điểm' : 'Point'} ${pointNum}`
     addStep({
@@ -53,7 +55,7 @@ export default function WorkflowPanel() {
     })
   }
 
-  const handleAddDO = () => {
+  const handleAddDO = (): void => {
     addStep({
       type: 'SetDO',
       label: language === 'vi' ? 'Cài đặt DO 1' : 'Set DO 1',
@@ -65,7 +67,7 @@ export default function WorkflowPanel() {
     })
   }
 
-  const handleAddDelay = () => {
+  const handleAddDelay = (): void => {
     addStep({
       type: 'WaitMs',
       label: language === 'vi' ? 'Đợi trễ thời gian' : 'Wait Time Delay',
@@ -75,14 +77,14 @@ export default function WorkflowPanel() {
     })
   }
 
-  const handleStepClick = (step: WorkflowStep) => {
+  const handleStepClick = (step: WorkflowStep): void => {
     setSelectedStepId(step.id)
     if (step.jointAngles) {
       setJointAngles(step.jointAngles)
     }
   }
 
-  const moveStep = (index: number, direction: 'up' | 'down') => {
+  const moveStep = (index: number, direction: 'up' | 'down'): void => {
     const nextIndex = direction === 'up' ? index - 1 : index + 1
     if (nextIndex < 0 || nextIndex >= steps.length) return
     
@@ -121,6 +123,8 @@ export default function WorkflowPanel() {
           </button>
         </div>
       </div>
+
+      <ArtifactSemanticsEditor />
 
       {/* Mode Specific Sidebars */}
       {mode === 'normal' ? (

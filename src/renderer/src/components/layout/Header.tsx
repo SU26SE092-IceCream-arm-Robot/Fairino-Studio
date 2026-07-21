@@ -9,6 +9,10 @@ import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload } from '
 import { electronService } from '../../services/electronService'
 import { translations } from '../../i18n/translations'
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export default function Header() {
   const steps = useRobotStore((state) => state.steps)
   const projectName = useRobotStore((state) => state.projectName)
@@ -216,7 +220,7 @@ export default function Header() {
         fileName,
         lua: stepCode,
         sidecarFileName,
-        sidecar: createIceBotArtifactSidecar(step, fileName, stepIndex),
+        sidecar: createIceBotArtifactSidecar(isLoop ? [step, nextStep] : [step], fileName, stepIndex),
         runOrder: stepIndex
       })
       idx += isLoop ? 2 : 1
@@ -225,8 +229,20 @@ export default function Header() {
     return { projectName: projName, artifacts }
   }
 
+  const tryBuildIceBotExportArtifacts = (): { projectName: string; artifacts: IceBotExportArtifact[] } | null => {
+    try {
+      return buildIceBotExportArtifacts()
+    } catch (error: unknown) {
+      const message = errorMessage(error)
+      alert(language === 'vi'
+        ? `Cấu hình IceBot artifact không hợp lệ:\n${message}`
+        : `Invalid IceBot artifact configuration:\n${message}`)
+      return null
+    }
+  }
+
   const handleExportLua = async () => {
-    const exportData = buildIceBotExportArtifacts()
+    const exportData = tryBuildIceBotExportArtifacts()
     if (!exportData) return
     const defaultName = `${exportData.projectName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'icebot'}-export.zip`
     const result = await electronService.showSaveDialog({
@@ -243,15 +259,16 @@ export default function Header() {
       alert(language === 'vi'
         ? `Xuất gói IceBot thành công:\n${result.filePath}`
         : `IceBot bundle exported successfully:\n${result.filePath}`)
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = errorMessage(error)
       alert(language === 'vi'
-        ? `Lỗi khi xuất gói IceBot:\n${error.message}`
-        : `Error exporting IceBot bundle:\n${error.message}`)
+        ? `Lỗi khi xuất gói IceBot:\n${message}`
+        : `Error exporting IceBot bundle:\n${message}`)
     }
   }
 
   const handleExportLuaFiles = async () => {
-    const exportData = buildIceBotExportArtifacts()
+    const exportData = tryBuildIceBotExportArtifacts()
     if (!exportData) return
     const result = await electronService.showOpenDialog({
       title: language === 'vi' ? 'Chọn thư mục xuất file LUA riêng lẻ' : 'Select Folder for Individual LUA Files',
