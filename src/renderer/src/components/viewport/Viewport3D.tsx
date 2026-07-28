@@ -12,7 +12,7 @@ import { useSceneStore } from '../../store/sceneStore'
 import { solveIK } from '../../engine/robot/ikSolver'
 import { AlertTriangle, Box, Crosshair, Hand, Pause, Play, RotateCw, ShieldAlert, Square, Move, Maximize } from 'lucide-react'
 import { JointAngles, TCPPose, WorkflowStep } from '../../types/robot.types'
-import type { ModelUnit, ToolMountAxis } from '../../types/scene.types'
+import type { CollisionMode, ModelUnit, ToolMountAxis } from '../../types/scene.types'
 
 
 interface SimpleWaypointScreenLabel {
@@ -44,7 +44,7 @@ const SELF_COLLISION_PAIRS = [
   { a: 'forearm_link', b: 'wrist3_link' }
 ]
 
-const TOOL_ALLOWED_CONTACT_LINKS = ['wrist3_link']
+const TOOL_ALLOWED_CONTACT_LINKS = ['wrist3_link', 'wrist2_link', 'wrist1_link']
 
 export default function Viewport3D() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1508,12 +1508,17 @@ export default function Viewport3D() {
       const currentLanguage = useRobotStore.getState().language
 
       // 1. Gather active visible auxiliary objects (AABB is fine for non-articulated objects)
-      const activeObjects: { id: string; name: string; box: THREE.Box3 }[] = []
+      const activeObjects: { id: string; name: string; box: THREE.Box3; collisionMode: CollisionMode }[] = []
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
         if (storeObj && storeObj.visible && !storeObj.isTool) {
           const box = new THREE.Box3().setFromObject(threeObj)
-          activeObjects.push({ id, name: storeObj.name, box })
+          activeObjects.push({
+            id,
+            name: storeObj.name,
+            box,
+            collisionMode: storeObj.collisionMode || 'strict'
+          })
         }
       }
 
@@ -1586,6 +1591,7 @@ export default function Viewport3D() {
           let isNearObj = false
           if (!isCollidingGround) {
             for (const obj of activeObjects) {
+              if (obj.collisionMode === 'ignore') continue
               if (obb.intersectsBox3(obj.box)) { isCollidingObj = true; break }
               if (getOBBToBoxDistance(obb, obj.box) < NEAR_DISTANCE) isNearObj = true
             }
@@ -1628,12 +1634,20 @@ export default function Viewport3D() {
         if (activeToolHitbox) {
           const toolOBB = activeToolHitbox.obb
           const minToolY = getOBBMinY(toolOBB)
-          const collidesGround = minToolY < GROUND_Y
+          const isInsideAllowToolObj = activeObjects.some(obj => {
+            if (obj.collisionMode !== 'allow_tool') return false
+            return toolOBB.intersectsBox3(obj.box)
+          })
+          const collidesGround = !isInsideAllowToolObj && (minToolY < GROUND_Y)
           const nearGround = !collidesGround && minToolY < NEAR_DISTANCE
-          const collidesObject = activeObjects.some(obj => toolOBB.intersectsBox3(obj.box))
-          const nearObject = !collidesObject && activeObjects.some(
-            obj => getOBBToBoxDistance(toolOBB, obj.box) < NEAR_DISTANCE
-          )
+          const collidesObject = activeObjects.some(obj => {
+            if (obj.collisionMode === 'ignore' || obj.collisionMode === 'allow_tool') return false
+            return toolOBB.intersectsBox3(obj.box)
+          })
+          const nearObject = !collidesObject && activeObjects.some(obj => {
+            if (obj.collisionMode === 'ignore' || obj.collisionMode === 'allow_tool') return false
+            return getOBBToBoxDistance(toolOBB, obj.box) < NEAR_DISTANCE
+          })
           let collidesRobot = false
           let nearRobot = false
           for (const [linkName, linkOBB] of linkOBBMap.entries()) {
@@ -1655,6 +1669,13 @@ export default function Viewport3D() {
 
         // Auxiliary objects still shown as AABB Box3Helper
         for (const obj of activeObjects) {
+          if (obj.collisionMode === 'ignore') {
+            const helper = new THREE.Box3Helper(obj.box, new THREE.Color(0x22c55e)) as any as THREE.LineSegments
+            scene.add(helper)
+            hitboxHelpersRef.current.push(helper)
+            continue
+          }
+
           let isColliding = false
           for (const obb of linkOBBMap.values()) {
             if (obb.intersectsBox3(obj.box)) { isColliding = true; break }
@@ -1665,7 +1686,7 @@ export default function Viewport3D() {
               if (getOBBToBoxDistance(obb, obj.box) < NEAR_DISTANCE) { isNear = true; break }
             }
           }
-          if (activeToolHitbox) {
+          if (activeToolHitbox && obj.collisionMode !== 'allow_tool') {
             if (activeToolHitbox.obb.intersectsBox3(obj.box)) {
               isColliding = true
               isNear = false
@@ -2010,6 +2031,7 @@ export default function Viewport3D() {
     let toolCollide = false
     let activeToolOBB: OBB | null = null
     const auxiliaryBoxes: THREE.Box3[] = []
+    const toolCollidableBoxes: THREE.Box3[] = []
     if (loadedObjectsRef.current.size > 0) {
       for (const [id, threeObj] of loadedObjectsRef.current.entries()) {
         const storeObj = useSceneStore.getState().objects.find(o => o.id === id)
@@ -2018,8 +2040,14 @@ export default function Viewport3D() {
           activeToolOBB = computeObjectOBB(threeObj)
           continue
         }
+        if (storeObj.collisionMode === 'ignore') continue
+
         const objBox = new THREE.Box3().setFromObject(threeObj)
         auxiliaryBoxes.push(objBox)
+        if (storeObj.collisionMode !== 'allow_tool') {
+          toolCollidableBoxes.push(objBox)
+        }
+
         if (!objectCollide) {
           for (const obb of linkOBBMap.values()) {
             if (obb.intersectsBox3(objBox)) { objectCollide = true; break }
@@ -2029,21 +2057,37 @@ export default function Viewport3D() {
     }
 
     if (activeToolOBB) {
-      toolCollide = getOBBMinY(activeToolOBB) < 0.005
+      const isInsideAllowToolObj = useSceneStore.getState().objects.some(o => {
+        if (o.isTool || !o.visible || o.collisionMode !== 'allow_tool') return false
+        const threeObj = loadedObjectsRef.current.get(o.id)
+        if (!threeObj) return false
+        const box = new THREE.Box3().setFromObject(threeObj)
+        return activeToolOBB!.intersectsBox3(box)
+      })
 
-      if (!toolCollide) {
-        for (const [linkName, linkOBB] of linkOBBMap.entries()) {
-          if (isToolContactAllowed(linkName)) continue
-          if (activeToolOBB.intersectsOBB(linkOBB)) {
-            toolCollide = true
-            break
-          }
+      const isGround = !isInsideAllowToolObj && (getOBBMinY(activeToolOBB) < 0.005)
+      let isRobot = false
+      let collidingLink = ''
+      for (const [linkName, linkOBB] of linkOBBMap.entries()) {
+        if (isToolContactAllowed(linkName)) continue
+        if (activeToolOBB.intersectsOBB(linkOBB)) {
+          isRobot = true
+          collidingLink = linkName
+          break
         }
       }
+      const isBox = toolCollidableBoxes.some(box => activeToolOBB!.intersectsBox3(box))
 
-      if (!toolCollide) {
-        toolCollide = auxiliaryBoxes.some(box => activeToolOBB!.intersectsBox3(box))
-      }
+      console.log('--- Tool Collision Debug ---', {
+        isGround,
+        isInsideAllowToolObj,
+        isRobot,
+        collidingLink,
+        isBox,
+        minY: getOBBMinY(activeToolOBB)
+      })
+
+      toolCollide = isGround || isRobot || isBox
     }
 
     return groundCollide || selfCollide || objectCollide || toolCollide

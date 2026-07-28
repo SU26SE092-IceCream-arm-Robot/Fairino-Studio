@@ -20,7 +20,8 @@ export type StepType =
   | 'WaitMs'
   | 'RotateJoint'
   | 'MoveTCP'
-  | 'Comment';
+  | 'Comment'
+  | 'TriggerDevice';
 
 export type IceBotEffectKind = 'System' | 'Motion' | 'Ingredient' | 'Option'
 export type IceBotQuantityMode = 'None' | 'FixedInArtifact'
@@ -57,6 +58,11 @@ export interface WorkflowStep {
   doIndex?: number;
   doValue?: 0 | 1;
   doType?: 'cabinet' | 'tool';
+  // External Device Trigger parameters
+  targetObjectId?: string;
+  targetObjectName?: string;
+  deviceCommand?: string;
+  deviceValue?: number | string;
   // Delay parameters
   delayMs?: number;
   // Low-code Scratch parameters

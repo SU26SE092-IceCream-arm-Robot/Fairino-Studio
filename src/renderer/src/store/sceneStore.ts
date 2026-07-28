@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { SceneObject, Transform3D } from '../types/scene.types'
+import { CollisionMode, SceneObject, Transform3D } from '../types/scene.types'
 
 interface SceneState {
   objects: SceneObject[]
@@ -12,6 +12,7 @@ interface SceneState {
   removeObject: (id: string) => void
   updateObjectTransform: (id: string, transform: Partial<Transform3D>) => void
   updateObjectVisibility: (id: string, visible: boolean) => void
+  updateObjectCollisionMode: (id: string, collisionMode: CollisionMode) => void
   updateObjectBaseSize: (id: string, baseSize: { x: number; y: number; z: number }) => void
   setSelectedObjectId: (id: string | null) => void
   setCollisionWarning: (warning: boolean) => void
@@ -87,6 +88,11 @@ export const useSceneStore = create<SceneState>((set) => ({
   updateObjectVisibility: (id, visible) =>
     set((state) => ({
       objects: state.objects.map((o) => (o.id === id ? { ...o, visible } : o))
+    })),
+
+  updateObjectCollisionMode: (id, collisionMode) =>
+    set((state) => ({
+      objects: state.objects.map((o) => (o.id === id ? { ...o, collisionMode } : o))
     })),
 
   updateObjectBaseSize: (id, baseSize) =>

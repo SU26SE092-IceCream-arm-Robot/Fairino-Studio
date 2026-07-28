@@ -2,7 +2,7 @@ import React, { useRef } from 'react'
 import { useSceneStore } from '../../store/sceneStore'
 import { useRobotStore } from '../../store/robotStore'
 import { Trash2, Eye, EyeOff, Upload, Settings, Plus } from 'lucide-react'
-import type { ModelUnit, ToolMountAxis, Transform3D } from '../../types/scene.types'
+import type { CollisionMode, ModelUnit, ToolMountAxis, Transform3D } from '../../types/scene.types'
 import { translations } from '../../i18n/translations'
 
 export default function ScenePanel({ compact = false }: { compact?: boolean }) {
@@ -19,6 +19,7 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
   const removeObject = useSceneStore((state) => state.removeObject)
   const updateObjectTransform = useSceneStore((state) => state.updateObjectTransform)
   const updateObjectVisibility = useSceneStore((state) => state.updateObjectVisibility)
+  const updateObjectCollisionMode = useSceneStore((state) => state.updateObjectCollisionMode)
   const selectedObjectId = useSceneStore((state) => state.selectedObjectId)
   const setSelectedObjectId = useSceneStore((state) => state.setSelectedObjectId)
 
@@ -256,7 +257,7 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
 
       {/* Selected Object Transforms */}
       {selectedObject && (
-        <div className={`${compact ? 'h-[212px] shrink-0 overflow-hidden p-2 space-y-1.5' : 'p-4 space-y-4 max-h-[400px] thin-scrollbar overflow-y-auto'} border-t border-[#2d2d34] bg-[#141417]`}>
+        <div className={`${compact ? 'max-h-[290px] overflow-y-auto thin-scrollbar p-2 space-y-1.5' : 'p-4 space-y-4 max-h-[400px] thin-scrollbar overflow-y-auto'} border-t border-[#2d2d34] bg-[#141417]`}>
           <div className="flex justify-between items-center">
             <span className={`${compact ? 'text-[11px]' : 'text-xs'} font-semibold text-slate-400 uppercase tracking-wider block`}>
               {t('transform')}
@@ -264,6 +265,28 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
             <span className="text-[10px] text-blue-400 font-bold truncate max-w-[150px]">
               {selectedObject.name}
             </span>
+          </div>
+
+          {/* Collision Mode Selection */}
+          <div className={compact ? 'space-y-0.5' : 'space-y-1'}>
+            <span className={`${compact ? 'text-[10px]' : 'text-[11px]'} font-bold text-slate-400 block`}>
+              {language === 'vi' ? 'Chế độ va chạm' : 'Collision Mode'}
+            </span>
+            <select
+              value={selectedObject.collisionMode || 'strict'}
+              onChange={(e) => updateObjectCollisionMode(selectedObject.id, e.target.value as CollisionMode)}
+              className="w-full bg-[#1e1e24] border border-[#2d2d34] rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500 cursor-pointer font-medium"
+            >
+              <option value="strict">
+                {language === 'vi' ? 'Kiểm tra đầy đủ (Strict)' : 'Strict (Full Check)'}
+              </option>
+              <option value="allow_tool">
+                {language === 'vi' ? 'Cho phép đầu gắp vào (Allow Tool Only)' : 'Allow Tool Only'}
+              </option>
+              <option value="ignore">
+                {language === 'vi' ? 'Bỏ qua va chạm (Ignore All)' : 'Ignore All'}
+              </option>
+            </select>
           </div>
 
           {/* Position (x, y, z) */}

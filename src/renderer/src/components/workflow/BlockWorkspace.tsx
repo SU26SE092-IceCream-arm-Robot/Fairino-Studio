@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Clock, CopyPlus, PackagePlus, Radio, Repeat, Route, Save, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Clock, CopyPlus, Cpu, PackagePlus, Radio, Repeat, Route, Save, Trash2 } from 'lucide-react'
 import { useRobotStore } from '../../store/robotStore'
+import { useSceneStore } from '../../store/sceneStore'
 import { translations } from '../../i18n/translations'
 import { JointAngles, SimpleModuleTemplate, SimpleWorkflowTemplate, TCPPose, WorkflowStep } from '../../types/robot.types'
 import { electronService } from '../../services/electronService'
@@ -9,6 +10,7 @@ type SimpleBlock =
   | { kind: 'moveAB'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL' }
   | { kind: 'delay'; id: string; stepIds: string[]; seconds: number }
   | { kind: 'do'; id: string; stepIds: string[]; doType: 'cabinet' | 'tool'; doIndex: number; doValue: 0 | 1 }
+  | { kind: 'triggerDevice'; id: string; stepIds: string[]; targetObjectId?: string; targetObjectName?: string; deviceCommand: string; deviceValue: number | string }
   | { kind: 'loop'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL'; loopType: 'cycles' | 'seconds'; loopValue: number }
   | { kind: 'unknown'; id: string; stepIds: string[]; step: WorkflowStep }
 
@@ -169,6 +171,20 @@ const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
         doType: step.doType || 'cabinet',
         doIndex: step.doIndex ?? 1,
         doValue: step.doValue ?? 1
+      })
+      index++
+      continue
+    }
+
+    if (step.type === 'TriggerDevice') {
+      blocks.push({
+        kind: 'triggerDevice',
+        id: step.simpleBlockId || step.id,
+        stepIds: [step.id],
+        targetObjectId: step.targetObjectId,
+        targetObjectName: step.targetObjectName,
+        deviceCommand: step.deviceCommand || 'ON',
+        deviceValue: step.deviceValue !== undefined ? step.deviceValue : 1
       })
       index++
       continue
@@ -339,6 +355,27 @@ export default function BlockWorkspace() {
     ])
   }
 
+  const addTriggerDevice = () => {
+    const blockId = createId('simple_trigger_device')
+    const sceneObjects = useSceneStore.getState().objects.filter((o) => !o.isTool)
+    const defaultObj = sceneObjects[0]
+    reorderSteps([
+      ...steps,
+      {
+        id: createId('step'),
+        type: 'TriggerDevice',
+        label: `Kích hoạt ${defaultObj ? defaultObj.name : 'Thiết bị'}`,
+        targetObjectId: defaultObj?.id || '',
+        targetObjectName: defaultObj?.name || 'Thiết bị',
+        deviceCommand: 'ON',
+        deviceValue: 1,
+        speed: 0,
+        acc: 0,
+        simpleBlockId: blockId
+      }
+    ])
+  }
+
   const addPickCup = () => {
     const start = clonePose(tcpPose)
     const target = { ...tcpPose, z: tcpPose.z - 80 }
@@ -492,7 +529,7 @@ export default function BlockWorkspace() {
           </span>
         </div>
 
-        <div className="grid grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-5 gap-1.5">
           <button onClick={() => addMoveAB()} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-blue-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
             <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-blue-500" />
             <Route size={15} className="mb-1 text-blue-400" />
@@ -512,6 +549,11 @@ export default function BlockWorkspace() {
             <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-amber-500" />
             <Radio size={15} className="mb-1 text-amber-400" />
             <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Set DO</span>
+          </button>
+          <button onClick={addTriggerDevice} disabled={isPlaying} className="group relative min-h-14 rounded-md border border-[#30303a] bg-[#202027] px-2 py-2 text-left transition hover:border-cyan-500/70 hover:bg-[#252532] cursor-pointer disabled:opacity-40">
+            <span className="absolute inset-x-0 top-0 h-0.5 rounded-t-md bg-cyan-500" />
+            <Cpu size={15} className="mb-1 text-cyan-400" />
+            <span className="block text-[11px] font-bold text-slate-100 leading-tight font-mono">Kích Thiết Bị</span>
           </button>
         </div>
 
@@ -952,6 +994,66 @@ export default function BlockWorkspace() {
                       <option value={1}>{t('turnOn')}</option>
                       <option value={0}>{t('turnOff')}</option>
                     </select>
+                  </div>
+                )}
+
+                {block.kind === 'triggerDevice' && (
+                  <div className="p-3 grid grid-cols-3 gap-2">
+                    <label className="text-[10px] text-slate-500 col-span-1">
+                      {language === 'vi' ? 'Chọn Thiết Bị' : 'Target Device'}
+                      <select
+                        value={block.targetObjectId || ''}
+                        onChange={(e) => {
+                          const objId = e.target.value
+                          const objName = useSceneStore.getState().objects.find(o => o.id === objId)?.name || 'Thiết bị'
+                          updateStepById(block.stepIds[0], (step) => ({
+                            ...step,
+                            targetObjectId: objId,
+                            targetObjectName: objName,
+                            label: `Kích hoạt ${objName}`
+                          }))
+                        }}
+                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none cursor-pointer"
+                      >
+                        {useSceneStore.getState().objects.filter(o => !o.isTool).length === 0 ? (
+                          <option value="">{language === 'vi' ? '(Chưa có thiết bị)' : '(No devices)'}</option>
+                        ) : (
+                          useSceneStore.getState().objects.filter(o => !o.isTool).map((o) => (
+                            <option key={o.id} value={o.id}>{o.name}</option>
+                          ))
+                        )}
+                      </select>
+                    </label>
+
+                    <label className="text-[10px] text-slate-500 col-span-1">
+                      {language === 'vi' ? 'Lệnh / Command' : 'Command'}
+                      <select
+                        value={block.deviceCommand || 'ON'}
+                        onChange={(e) => updateStepById(block.stepIds[0], (step) => ({
+                          ...step,
+                          deviceCommand: e.target.value
+                        }))}
+                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none cursor-pointer"
+                      >
+                        <option value="ON">ON (Bật)</option>
+                        <option value="OFF">OFF (Tắt)</option>
+                        <option value="PULSE">PULSE (Kích Xung)</option>
+                        <option value="CUSTOM">CUSTOM (Tùy chỉnh)</option>
+                      </select>
+                    </label>
+
+                    <label className="text-[10px] text-slate-500 col-span-1">
+                      {language === 'vi' ? 'Giá trị' : 'Value'}
+                      <input
+                        type="text"
+                        value={block.deviceValue !== undefined ? block.deviceValue : 1}
+                        onChange={(e) => updateStepById(block.stepIds[0], (step) => ({
+                          ...step,
+                          deviceValue: e.target.value
+                        }))}
+                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none"
+                      />
+                    </label>
                   </div>
                 )}
               </div>

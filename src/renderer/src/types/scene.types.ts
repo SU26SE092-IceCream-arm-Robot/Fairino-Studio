@@ -12,6 +12,7 @@ export interface Transform3D {
 
 export type ModelUnit = 'mm' | 'cm' | 'm';
 export type ToolMountAxis = 'auto' | '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
+export type CollisionMode = 'strict' | 'allow_tool' | 'ignore';
 
 export interface SceneObject {
   id: string;
@@ -25,4 +26,5 @@ export interface SceneObject {
   isTool?: boolean;  // true if it is an end-effector tool
   modelUnit: ModelUnit;
   toolMountAxis: ToolMountAxis;
+  collisionMode?: CollisionMode;
 }
