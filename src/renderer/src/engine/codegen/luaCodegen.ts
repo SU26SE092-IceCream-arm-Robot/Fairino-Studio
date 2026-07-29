@@ -80,12 +80,10 @@ function generateStepCode(step: WorkflowStep, d: (n: any, decimals?: number) => 
 
     case 'TriggerDevice': {
       const objName = step.targetObjectName || 'Thiết bị'
-      const objId = step.targetObjectId || 'unknown_id'
       const cmd = step.deviceCommand || 'ON'
-      const val = step.deviceValue !== undefined ? step.deviceValue : 1
-      code += `-- [Kích hoạt máy] Thiết bị: ${objName} | Lệnh: ${cmd} | Giá trị: ${val}\n`
-      code += `-- TRIGGER_DEVICE: id="${objId}", name="${objName}", command="${cmd}", value=${val}\n`
-      code += `TriggerDevice("${objId}", "${objName}", "${cmd}", ${val})`
+      code += `-- [Kích hoạt máy] Thiết bị: ${objName} | Lệnh: ${cmd}\n`
+      code += `-- TRIGGER_DEVICE: name="${objName}", command="${cmd}"\n`
+      code += `TriggerDevice("${objName}", "${cmd}")`
       break
     }
 
@@ -103,7 +101,7 @@ function extractUsedDevices(steps: WorkflowStep[]): { id: string; name: string }
   const map = new Map<string, string>()
   for (const s of steps) {
     if (s.type === 'TriggerDevice' && s.targetObjectName) {
-      map.set(s.targetObjectId || s.targetObjectName, s.targetObjectName)
+      map.set(s.targetObjectName, s.targetObjectName)
     }
   }
   return Array.from(map.entries()).map(([id, name]) => ({ id, name }))

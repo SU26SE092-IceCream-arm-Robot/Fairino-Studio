@@ -61,7 +61,7 @@ export interface WorkflowStep {
   // External Device Trigger parameters
   targetObjectId?: string;
   targetObjectName?: string;
-  deviceCommand?: string;
+  deviceCommand?: 'ON' | 'OFF';
   deviceValue?: number | string;
   // Delay parameters
   delayMs?: number;

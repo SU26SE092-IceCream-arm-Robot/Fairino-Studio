@@ -10,7 +10,7 @@ type SimpleBlock =
   | { kind: 'moveAB'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL' }
   | { kind: 'delay'; id: string; stepIds: string[]; seconds: number }
   | { kind: 'do'; id: string; stepIds: string[]; doType: 'cabinet' | 'tool'; doIndex: number; doValue: 0 | 1 }
-  | { kind: 'triggerDevice'; id: string; stepIds: string[]; targetObjectId?: string; targetObjectName?: string; deviceCommand: string; deviceValue: number | string }
+  | { kind: 'triggerDevice'; id: string; stepIds: string[]; targetObjectId?: string; targetObjectName?: string; deviceCommand: 'ON' | 'OFF'; deviceValue?: number | string }
   | { kind: 'loop'; id: string; stepIds: string[]; pointA: TCPPose; pointB: TCPPose; speed: number; acc: number; motionType: 'MoveJ' | 'MoveL'; loopType: 'cycles' | 'seconds'; loopValue: number }
   | { kind: 'unknown'; id: string; stepIds: string[]; step: WorkflowStep }
 
@@ -181,10 +181,8 @@ const stepsToSimpleBlocks = (steps: WorkflowStep[]): SimpleBlock[] => {
         kind: 'triggerDevice',
         id: step.simpleBlockId || step.id,
         stepIds: [step.id],
-        targetObjectId: step.targetObjectId,
         targetObjectName: step.targetObjectName,
-        deviceCommand: step.deviceCommand || 'ON',
-        deviceValue: step.deviceValue !== undefined ? step.deviceValue : 1
+        deviceCommand: (step.deviceCommand as 'ON' | 'OFF') || 'ON'
       })
       index++
       continue
@@ -365,10 +363,8 @@ export default function BlockWorkspace() {
         id: createId('step'),
         type: 'TriggerDevice',
         label: `Kích hoạt ${defaultObj ? defaultObj.name : 'Thiết bị'}`,
-        targetObjectId: defaultObj?.id || '',
         targetObjectName: defaultObj?.name || 'Thiết bị',
         deviceCommand: 'ON',
-        deviceValue: 1,
         speed: 0,
         acc: 0,
         simpleBlockId: blockId
@@ -998,17 +994,15 @@ export default function BlockWorkspace() {
                 )}
 
                 {block.kind === 'triggerDevice' && (
-                  <div className="p-3 grid grid-cols-3 gap-2">
+                  <div className="p-3 grid grid-cols-2 gap-2">
                     <label className="text-[10px] text-slate-500 col-span-1">
                       {language === 'vi' ? 'Chọn Thiết Bị' : 'Target Device'}
                       <select
-                        value={block.targetObjectId || ''}
+                        value={block.targetObjectName || ''}
                         onChange={(e) => {
-                          const objId = e.target.value
-                          const objName = useSceneStore.getState().objects.find(o => o.id === objId)?.name || 'Thiết bị'
+                          const objName = e.target.value
                           updateStepById(block.stepIds[0], (step) => ({
                             ...step,
-                            targetObjectId: objId,
                             targetObjectName: objName,
                             label: `Kích hoạt ${objName}`
                           }))
@@ -1019,7 +1013,7 @@ export default function BlockWorkspace() {
                           <option value="">{language === 'vi' ? '(Chưa có thiết bị)' : '(No devices)'}</option>
                         ) : (
                           useSceneStore.getState().objects.filter(o => !o.isTool).map((o) => (
-                            <option key={o.id} value={o.id}>{o.name}</option>
+                            <option key={o.name} value={o.name}>{o.name}</option>
                           ))
                         )}
                       </select>
@@ -1031,28 +1025,13 @@ export default function BlockWorkspace() {
                         value={block.deviceCommand || 'ON'}
                         onChange={(e) => updateStepById(block.stepIds[0], (step) => ({
                           ...step,
-                          deviceCommand: e.target.value
+                          deviceCommand: e.target.value as 'ON' | 'OFF'
                         }))}
                         className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none cursor-pointer"
                       >
                         <option value="ON">ON (Bật)</option>
                         <option value="OFF">OFF (Tắt)</option>
-                        <option value="PULSE">PULSE (Kích Xung)</option>
-                        <option value="CUSTOM">CUSTOM (Tùy chỉnh)</option>
                       </select>
-                    </label>
-
-                    <label className="text-[10px] text-slate-500 col-span-1">
-                      {language === 'vi' ? 'Giá trị' : 'Value'}
-                      <input
-                        type="text"
-                        value={block.deviceValue !== undefined ? block.deviceValue : 1}
-                        onChange={(e) => updateStepById(block.stepIds[0], (step) => ({
-                          ...step,
-                          deviceValue: e.target.value
-                        }))}
-                        className="mt-1 w-full bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none"
-                      />
                     </label>
                   </div>
                 )}

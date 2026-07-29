@@ -43,17 +43,23 @@ export function setupMenu(mainWindow: BrowserWindow): void {
         },
         { type: 'separator' },
         {
-          label: 'Xuất Script LUA...',
-          accelerator: 'CmdOrCtrl+E',
-          click: () => {
-            mainWindow.webContents.send('menu-action', 'export-lua')
-          }
-        },
-        {
-          label: 'Xuất file LUA riêng lẻ (Nâng cao)...',
-          click: () => {
-            mainWindow.webContents.send('menu-action', 'export-lua-files')
-          }
+          label: 'Export',
+          submenu: [
+            {
+              label: 'Xuất Workflow Lớn (.lua)...',
+              accelerator: 'CmdOrCtrl+E',
+              click: () => {
+                mainWindow.webContents.send('menu-action', 'export-workflow-large')
+              }
+            },
+            {
+              label: 'Xuất Workflow Theo Step (.zip)...',
+              accelerator: 'CmdOrCtrl+Shift+E',
+              click: () => {
+                mainWindow.webContents.send('menu-action', 'export-workflow-steps')
+              }
+            }
+          ]
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }

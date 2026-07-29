@@ -333,24 +333,19 @@ export function parseLua(luaContent: string): { steps: WorkflowStep[]; projectNa
     }
 
     // 10. Parse TriggerDevice
-    // TriggerDevice("id", "name", "cmd", val)
-    const triggerMatch = line.match(/TriggerDevice\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*([^)]+)\)/)
+    // TriggerDevice("name", "cmd")
+    const triggerMatch = line.match(/TriggerDevice\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)/)
     if (triggerMatch) {
-      const targetObjectId = triggerMatch[1]
-      const targetObjectName = triggerMatch[2]
-      const deviceCommand = triggerMatch[3]
-      const rawVal = triggerMatch[4].trim().replace(/^['"]|['"]$/g, '')
-      const deviceValue = isNaN(Number(rawVal)) ? rawVal : Number(rawVal)
+      const targetObjectName = triggerMatch[1]
+      const deviceCommand = triggerMatch[2] as 'ON' | 'OFF'
 
       steps.push({
         id: `step_imported_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`,
         type: 'TriggerDevice',
         label: currentLabel || `Kích hoạt ${targetObjectName}`,
         comment: currentComment || undefined,
-        targetObjectId,
         targetObjectName,
         deviceCommand,
-        deviceValue,
         speed: 50,
         acc: 50
       })

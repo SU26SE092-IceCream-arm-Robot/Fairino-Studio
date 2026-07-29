@@ -1,13 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
-import { generateSingleStepLua } from '../../engine/codegen/luaCodegen'
-import { createIceBotArtifactSidecar } from '../../engine/codegen/icebotArtifactSidecar'
-import { createIceBotExportBundle, type IceBotExportArtifact } from '../../engine/codegen/icebotExportBundle'
+import { generateSingleStepLua, generateLua } from '../../engine/codegen/luaCodegen'
 import { parseLua } from '../../engine/codegen/luaParser'
-import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload } from 'lucide-react'
+import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload, ChevronDown } from 'lucide-react'
 import { electronService } from '../../services/electronService'
 import { translations } from '../../i18n/translations'
+import { strToU8, zipSync } from 'fflate'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -32,6 +31,21 @@ export default function Header() {
   const language = useRobotStore((state) => state.language)
   const setLanguage = useRobotStore((state) => state.setLanguage)
   const t = (key: keyof typeof translations.vi) => translations[language][key]
+
+  const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setExportDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [])
 
   const handleNewProject = () => {
     if (confirm(t('newProjectConfirm'))) {
@@ -193,103 +207,79 @@ export default function Header() {
     }
   }
 
-  const buildIceBotExportArtifacts = (): { projectName: string; artifacts: IceBotExportArtifact[] } | null => {
-    const currentSteps = useRobotStore.getState().steps
-    if (currentSteps.length === 0) {
-      alert(language === 'vi' ? 'Không có bước workflow nào để xuất!' : 'No workflow steps to export!')
-      return null
-    }
-
-    const projName = useRobotStore.getState().projectName
+const handleExportLargeLua = async () => {
+    const projName = useRobotStore.getState().projectName || 'Unnamed Project'
     const activeTool = useSceneStore.getState().objects.find(o => o.isTool && o.visible)
     const toolName = activeTool ? activeTool.name : 'None'
-    const artifacts: IceBotExportArtifact[] = []
-    let stepIndex = 1
-    let idx = 0
-    while (idx < currentSteps.length) {
-      const step = currentSteps[idx]
-      const nextStep = currentSteps[idx + 1]
-      const isLoop = step.simpleBlockRole === 'loopA' && nextStep?.simpleBlockRole === 'loopB'
-      const stepCode = generateSingleStepLua(step, isLoop ? nextStep : null, projName, toolName, stepIndex)
-      const cleanLabel = step.label.replace(/[^a-zA-Z0-9_-]/g, '_')
-      const fileName = isLoop
-        ? `${String(stepIndex).padStart(2, '0')}_Loop_${cleanLabel}.lua`
-        : `${String(stepIndex).padStart(2, '0')}_${step.type}_${cleanLabel}.lua`
-      const sidecarFileName = fileName.replace(/\.lua$/i, '.icebot.json')
-      artifacts.push({
-        fileName,
-        lua: stepCode,
-        sidecarFileName,
-        sidecar: createIceBotArtifactSidecar(isLoop ? [step, nextStep] : [step], fileName, stepIndex),
-        runOrder: stepIndex
-      })
-      idx += isLoop ? 2 : 1
-      stepIndex++
-    }
-    return { projectName: projName, artifacts }
-  }
+    const currentSteps = useRobotStore.getState().steps
 
-  const tryBuildIceBotExportArtifacts = (): { projectName: string; artifacts: IceBotExportArtifact[] } | null => {
-    try {
-      return buildIceBotExportArtifacts()
-    } catch (error: unknown) {
-      const message = errorMessage(error)
-      alert(language === 'vi'
-        ? `Cấu hình IceBot artifact không hợp lệ:\n${message}`
-        : `Invalid IceBot artifact configuration:\n${message}`)
-      return null
-    }
-  }
-
-  const handleExportLua = async () => {
-    const exportData = tryBuildIceBotExportArtifacts()
-    if (!exportData) return
-    const defaultName = `${exportData.projectName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'icebot'}-export.zip`
+    const defaultName = `${projName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'project'}.lua`
     const result = await electronService.showSaveDialog({
-      title: language === 'vi' ? 'Xuất gói IceBot' : 'Export IceBot Bundle',
+      title: language === 'vi' ? 'Xuất Workflow Lớn (.lua)' : 'Export Large Workflow (.lua)',
       defaultPath: defaultName,
-      filters: [{ name: 'IceBot Export Bundle', extensions: ['zip'] }]
+      filters: [{ name: 'Lua Script File', extensions: ['lua'] }]
     })
     if (result.canceled || !result.filePath) return
 
     try {
-      const bundle = createIceBotExportBundle(exportData.projectName, exportData.artifacts)
-      const writeResult = await electronService.writeBinaryFile(result.filePath, bundle)
+      const luaContent = generateLua(currentSteps, projName, toolName)
+      const writeResult = await electronService.writeFile(result.filePath, luaContent)
       if (!writeResult.success) throw new Error(writeResult.error || 'Unknown write error')
       alert(language === 'vi'
-        ? `Xuất gói IceBot thành công:\n${result.filePath}`
-        : `IceBot bundle exported successfully:\n${result.filePath}`)
+        ? `Xuất Workflow lớn thành công:\n${result.filePath}`
+        : `Large workflow exported successfully:\n${result.filePath}`)
     } catch (error: unknown) {
       const message = errorMessage(error)
       alert(language === 'vi'
-        ? `Lỗi khi xuất gói IceBot:\n${message}`
-        : `Error exporting IceBot bundle:\n${message}`)
+        ? `Lỗi khi xuất Workflow lớn:\n${message}`
+        : `Error exporting large workflow:\n${message}`)
     }
   }
 
-  const handleExportLuaFiles = async () => {
-    const exportData = tryBuildIceBotExportArtifacts()
-    if (!exportData) return
-    const result = await electronService.showOpenDialog({
-      title: language === 'vi' ? 'Chọn thư mục xuất file LUA riêng lẻ' : 'Select Folder for Individual LUA Files',
-      properties: ['openDirectory', 'createDirectory']
-    })
-    if (result.canceled || result.filePaths.length === 0) return
+  const handleExportStepsZip = async () => {
+    const projName = useRobotStore.getState().projectName || 'Unnamed Project'
+    const activeTool = useSceneStore.getState().objects.find(o => o.isTool && o.visible)
+    const toolName = activeTool ? activeTool.name : 'None'
+    const currentSteps = useRobotStore.getState().steps
 
-    const dirPath = result.filePaths[0]
-    const errors: string[] = []
-    for (const artifact of exportData.artifacts) {
-      const luaResult = await electronService.writeFile(`${dirPath}/${artifact.fileName}`, artifact.lua)
-      if (!luaResult.success) errors.push(`${artifact.fileName}: ${luaResult.error}`)
-      const sidecarResult = await electronService.writeFile(
-        `${dirPath}/${artifact.sidecarFileName}`,
-        JSON.stringify(artifact.sidecar, null, 2)
-      )
-      if (!sidecarResult.success) errors.push(`${artifact.sidecarFileName}: ${sidecarResult.error}`)
+    const defaultName = `${projName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'project'}.zip`
+    const result = await electronService.showSaveDialog({
+      title: language === 'vi' ? 'Xuất Workflow Theo Step (.zip)' : 'Export Steps Workflow (.zip)',
+      defaultPath: defaultName,
+      filters: [{ name: 'ZIP Archive', extensions: ['zip'] }]
+    })
+    if (result.canceled || !result.filePath) return
+
+    try {
+      const files: Record<string, Uint8Array> = {}
+      let stepIndex = 1
+      let idx = 0
+      while (idx < currentSteps.length) {
+        const step = currentSteps[idx]
+        const nextStep = currentSteps[idx + 1]
+        const isLoop = step.simpleBlockRole === 'loopA' && nextStep?.simpleBlockRole === 'loopB'
+        const stepCode = generateSingleStepLua(step, isLoop ? nextStep : null, projName, toolName, stepIndex)
+        
+        // Naming convention: project_name_step<stepIndex>.lua
+        const fileName = `${projName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'project'}_step${stepIndex}.lua`
+        files[fileName] = strToU8(stepCode)
+        
+        idx += isLoop ? 2 : 1
+        stepIndex++
+      }
+
+      const bundle = zipSync(files, { level: 6 })
+      const writeResult = await electronService.writeBinaryFile(result.filePath, bundle)
+      if (!writeResult.success) throw new Error(writeResult.error || 'Unknown write error')
+      alert(language === 'vi'
+        ? `Xuất Workflow theo step thành công:\n${result.filePath}`
+        : `Steps workflow exported successfully:\n${result.filePath}`)
+    } catch (error: unknown) {
+      const message = errorMessage(error)
+      alert(language === 'vi'
+        ? `Lỗi khi xuất Workflow theo step:\n${message}`
+        : `Error exporting steps workflow:\n${message}`)
     }
-    alert(errors.length === 0
-      ? (language === 'vi' ? `Đã xuất file riêng lẻ vào:\n${dirPath}` : `Individual files exported to:\n${dirPath}`)
-      : (language === 'vi' ? `Có lỗi khi xuất file:\n${errors.join('\n')}` : `File export errors:\n${errors.join('\n')}`))
   }
 
   const handleImportLua = async () => {
@@ -418,11 +408,11 @@ export default function Header() {
           case 'save-as-project':
             handleSaveAsProject()
             break
-          case 'export-lua':
-            handleExportLua()
+          case 'export-workflow-large':
+            handleExportLargeLua()
             break
-          case 'export-lua-files':
-            handleExportLuaFiles()
+          case 'export-workflow-steps':
+            handleExportStepsZip()
             break
           case 'import-lua':
             handleImportLua()
@@ -527,13 +517,41 @@ export default function Header() {
             <span className="text-[11px] font-semibold hidden md:inline">{t('importLua')}</span>
           </button>
           
-          <button
-            onClick={handleExportLua}
-            className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md transition flex items-center gap-1.5"
-          >
-            <Play size={12} className="fill-white" />
-            {t('exportLua')} ({steps.length})
-          </button>
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+              className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <Play size={12} className="fill-white" />
+              {t('exportLua')} ({steps.length})
+              <ChevronDown size={12} />
+            </button>
+            {exportDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-56 rounded-md bg-[#1c1c24] border border-[#2d2d38] shadow-lg z-50 overflow-hidden py-1">
+                <button
+                  onClick={() => {
+                    setExportDropdownOpen(false)
+                    handleExportLargeLua()
+                  }}
+                  className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
+                >
+                  <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Lớn (.lua)' : 'Export Large Workflow (.lua)'}</span>
+                  <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Gộp tất cả bước chạy vào 1 file LUA' : 'Combine all steps into 1 LUA file'}</span>
+                </button>
+                <div className="border-t border-[#2d2d38] my-1"></div>
+                <button
+                  onClick={() => {
+                    setExportDropdownOpen(false)
+                    handleExportStepsZip()
+                  }}
+                  className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
+                >
+                  <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Theo Step (.zip)' : 'Export Steps Workflow (.zip)'}</span>
+                  <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Nén các file LUA lẻ của từng bước' : 'ZIP individual LUA files of each step'}</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>
