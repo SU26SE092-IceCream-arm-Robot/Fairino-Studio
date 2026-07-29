@@ -1,26 +1,105 @@
 import { Menu, MenuItemConstructorOptions, BrowserWindow, dialog, app } from 'electron'
 
-/**
- * Creates and sets the native application menu bar.
- * Dispatches file events to the Renderer process via WebContents.
- */
-export function setupMenu(mainWindow: BrowserWindow): void {
+// Language translation dictionary for Native Menu
+const labels = {
+  vi: {
+    file: 'Tệp',
+    newProject: 'Dự án Mới',
+    openProject: 'Mở Dự án...',
+    save: 'Lưu',
+    saveAs: 'Lưu Dưới Dạng...',
+    export: 'Xuất',
+    exportLarge: 'Xuất Workflow Lớn (.lua)...',
+    exportSteps: 'Xuất Workflow Theo Step (.zip)...',
+    import: 'Nạp LUA...',
+    quit: 'Thoát',
+    edit: 'Chỉnh sửa',
+    undo: 'Hoàn tác',
+    redo: 'Làm lại',
+    cut: 'Cắt',
+    copy: 'Sao chép',
+    paste: 'Dán',
+    selectAll: 'Chọn tất cả',
+    view: 'Hiển thị',
+    reload: 'Tải lại',
+    forceReload: 'Tải lại toàn bộ',
+    toggleDevTools: 'Bật/Tắt DevTools',
+    resetZoom: 'Đặt lại cỡ chữ',
+    zoomIn: 'Phóng to',
+    zoomOut: 'Thu nhỏ',
+    toggleFullscreen: 'Toàn màn hình',
+    quickAccess: 'Thanh công cụ nhanh',
+    hitbox: 'Hiện hộp va chạm (Hitbox)',
+    preferences: 'Cài đặt',
+    language: 'Ngôn ngữ',
+    help: 'Trợ giúp',
+    learnMore: 'Tìm hiểu thêm',
+    updates: 'Kiểm tra Cập nhật...',
+    about: 'Về FaiRobot Studio'
+  },
+  en: {
+    file: 'File',
+    newProject: 'New Project',
+    openProject: 'Open Project...',
+    save: 'Save',
+    saveAs: 'Save As...',
+    export: 'Export',
+    exportLarge: 'Export Large Workflow (.lua)...',
+    exportSteps: 'Export Steps Workflow (.zip)...',
+    import: 'Import LUA...',
+    quit: 'Quit',
+    edit: 'Edit',
+    undo: 'Undo',
+    redo: 'Redo',
+    cut: 'Cut',
+    copy: 'Copy',
+    paste: 'Paste',
+    selectAll: 'Select All',
+    view: 'View',
+    reload: 'Reload',
+    forceReload: 'Force Reload',
+    toggleDevTools: 'Toggle Developer Tools',
+    resetZoom: 'Actual Size',
+    zoomIn: 'Zoom In',
+    zoomOut: 'Zoom Out',
+    toggleFullscreen: 'Toggle Full Screen',
+    quickAccess: 'Quick Access Toolbar',
+    hitbox: 'Show Hitboxes (Collision)',
+    preferences: 'Preferences',
+    language: 'Language',
+    help: 'Help',
+    learnMore: 'Learn More',
+    updates: 'Check for Updates...',
+    about: 'About FaiRobot Studio'
+  }
+}
+
+export function setupMenu(
+  mainWindow: BrowserWindow,
+  state: { language: 'vi' | 'en'; showQuickAccessToolbar: boolean; isDebugHitbox: boolean } = {
+    language: 'vi',
+    showQuickAccessToolbar: false,
+    isDebugHitbox: false
+  }
+): void {
   const isMac = process.platform === 'darwin'
+  const lang = state.language || 'vi'
+  const t = labels[lang]
 
   const template: MenuItemConstructorOptions[] = [
     // File Menu
     {
-      label: 'File',
+      label: t.file,
       submenu: [
         {
-          label: 'Dự án Mới',
+          label: t.newProject,
           accelerator: 'CmdOrCtrl+N',
           click: () => {
             mainWindow.webContents.send('menu-action', 'new-project')
           }
         },
         {
-          label: 'Mở Dự án...',
+          label: t.openProject,
           accelerator: 'CmdOrCtrl+O',
           click: () => {
             mainWindow.webContents.send('menu-action', 'open-project')
@@ -28,14 +107,14 @@ export function setupMenu(mainWindow: BrowserWindow): void {
         },
         { type: 'separator' },
         {
-          label: 'Lưu',
+          label: t.save,
           accelerator: 'CmdOrCtrl+S',
           click: () => {
             mainWindow.webContents.send('menu-action', 'save-project')
           }
         },
         {
-          label: 'Lưu Dưới Dạng...',
+          label: t.saveAs,
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => {
             mainWindow.webContents.send('menu-action', 'save-as-project')
@@ -43,17 +122,17 @@ export function setupMenu(mainWindow: BrowserWindow): void {
         },
         { type: 'separator' },
         {
-          label: 'Export',
+          label: t.export,
           submenu: [
             {
-              label: 'Xuất Workflow Lớn (.lua)...',
+              label: t.exportLarge,
               accelerator: 'CmdOrCtrl+E',
               click: () => {
                 mainWindow.webContents.send('menu-action', 'export-workflow-large')
               }
             },
             {
-              label: 'Xuất Workflow Theo Step (.zip)...',
+              label: t.exportSteps,
               accelerator: 'CmdOrCtrl+Shift+E',
               click: () => {
                 mainWindow.webContents.send('menu-action', 'export-workflow-steps')
@@ -61,64 +140,116 @@ export function setupMenu(mainWindow: BrowserWindow): void {
             }
           ]
         },
+        {
+          label: t.import,
+          click: () => {
+            mainWindow.webContents.send('menu-action', 'import-lua')
+          }
+        },
         { type: 'separator' },
-        isMac ? { role: 'close' } : { role: 'quit' }
+        isMac ? { role: 'close' } : { role: 'quit', label: t.quit }
       ]
     },
     // Edit Menu
     {
-      label: 'Edit',
+      label: t.edit,
       submenu: [
-        { role: 'undo', label: 'Hoàn tác' },
-        { role: 'redo', label: 'Làm lại' },
+        { role: 'undo', label: t.undo },
+        { role: 'redo', label: t.redo },
         { type: 'separator' },
-        { role: 'cut', label: 'Cắt' },
-        { role: 'copy', label: 'Sao chép' },
-        { role: 'paste', label: 'Dán' },
-        { role: 'selectAll', label: 'Chọn tất cả' }
+        { role: 'cut', label: t.cut },
+        { role: 'copy', label: t.copy },
+        { role: 'paste', label: t.paste },
+        { role: 'selectAll', label: t.selectAll }
       ]
     },
     // View Menu
     {
-      label: 'View',
+      label: t.view,
       submenu: [
-        { role: 'reload', label: 'Tải lại' },
-        { role: 'forceReload', label: 'Tải lại toàn bộ' },
-        { role: 'toggleDevTools', label: 'Bật/Tắt DevTools' },
+        {
+          label: t.quickAccess,
+          type: 'checkbox',
+          checked: state.showQuickAccessToolbar,
+          click: (menuItem) => {
+            mainWindow.webContents.send('menu-action', 'toggle-quick-access', menuItem.checked)
+          }
+        },
+        {
+          label: t.hitbox,
+          type: 'checkbox',
+          checked: state.isDebugHitbox,
+          click: (menuItem) => {
+            mainWindow.webContents.send('menu-action', 'toggle-hitbox', menuItem.checked)
+          }
+        },
         { type: 'separator' },
-        { role: 'resetZoom', label: 'Đặt lại cỡ chữ' },
-        { role: 'zoomIn', label: 'Phóng to' },
-        { role: 'zoomOut', label: 'Thu nhỏ' },
+        { role: 'reload', label: t.reload },
+        { role: 'forceReload', label: t.forceReload },
+        { role: 'toggleDevTools', label: t.toggleDevTools },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: 'Toàn màn hình' }
+        { role: 'resetZoom', label: t.resetZoom },
+        { role: 'zoomIn', label: t.zoomIn },
+        { role: 'zoomOut', label: t.zoomOut },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: t.toggleFullscreen }
+      ]
+    },
+    // Preferences Menu
+    {
+      label: t.preferences,
+      submenu: [
+        {
+          label: t.language,
+          submenu: [
+            {
+              label: 'Tiếng Việt',
+              type: 'radio',
+              checked: lang === 'vi',
+              click: () => {
+                mainWindow.webContents.send('menu-action', 'change-language', 'vi')
+              }
+            },
+            {
+              label: 'English',
+              type: 'radio',
+              checked: lang === 'en',
+              click: () => {
+                mainWindow.webContents.send('menu-action', 'change-language', 'en')
+              }
+            }
+          ]
+        }
       ]
     },
     // Help Menu
     {
-      label: 'Help',
+      label: t.help,
       submenu: [
         {
-          label: 'Tìm hiểu thêm',
+          label: t.learnMore,
           click: async () => {
             const { shell } = require('electron')
             await shell.openExternal('https://electronjs.org')
           }
         },
         {
-          label: 'Kiểm tra Cập nhật...',
+          label: t.updates,
           click: () => {
             mainWindow.webContents.send('menu-action', 'check-for-updates')
           }
         },
         { type: 'separator' },
         {
-          label: 'Về FaiRobot Studio',
+          label: t.about,
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: 'Về FaiRobot Studio',
-              message: 'FaiRobot Studio v1.0.0',
-              detail: 'Ứng dụng mô phỏng và lập trình kéo thả trực quan cho robot Fairino FR5.'
+              title: t.about,
+              message: 'FaiRobot Studio v1.0.4',
+              detail: lang === 'vi' 
+                ? 'Ứng dụng mô phỏng và lập trình kéo thả trực quan cho robot Fairino FR5.'
+                : 'Simulation and visual block programming studio for the Fairino FR5 robot.'
             })
           }
         }
@@ -131,15 +262,15 @@ export function setupMenu(mainWindow: BrowserWindow): void {
     template.unshift({
       label: app.name,
       submenu: [
-        { role: 'about', label: `Về ${app.name}` },
+        { role: 'about', label: `${t.about}` },
         { type: 'separator' },
-        { role: 'services', label: 'Dịch vụ' },
+        { role: 'services', label: lang === 'vi' ? 'Dịch vụ' : 'Services' },
         { type: 'separator' },
-        { role: 'hide', label: `Ẩn ${app.name}` },
-        { role: 'hideOthers', label: 'Ẩn các cửa sổ khác' },
-        { role: 'unhide', label: 'Hiện tất cả' },
+        { role: 'hide', label: lang === 'vi' ? `Ẩn ${app.name}` : `Hide ${app.name}` },
+        { role: 'hideOthers', label: lang === 'vi' ? 'Ẩn các cửa sổ khác' : 'Hide Others' },
+        { role: 'unhide', label: lang === 'vi' ? 'Hiện tất cả' : 'Show All' },
         { type: 'separator' },
-        { role: 'quit', label: `Thoát ${app.name}` }
+        { role: 'quit', label: lang === 'vi' ? `Thoát ${app.name}` : `Quit ${app.name}` }
       ]
     })
   }

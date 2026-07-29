@@ -148,6 +148,12 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
   // Configure Auto Updater
   autoUpdater.autoDownload = false
 
+  ipcMain.on('update-menu-state', (_, state) => {
+    if (mainWindow) {
+      setupMenu(mainWindow, state)
+    }
+  })
+
   ipcMain.on('check-for-updates', () => {
     if (!app.isPackaged) {
       // Dev mode update mock

@@ -11,6 +11,7 @@ export interface ElectronService {
   readFile: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>
   readBlockLibrary: () => Promise<{ success: boolean; content?: string; error?: string }>
   writeBlockLibrary: (content: string) => Promise<{ success: boolean; error?: string }>
+  updateMenuState: (state: { language: 'vi' | 'en'; showQuickAccessToolbar: boolean; isDebugHitbox: boolean }) => void
 }
 
 const isElectronEnv = typeof window !== 'undefined' && 'api' in window
@@ -108,5 +109,13 @@ export const electronService: ElectronService = {
     }
     window.localStorage.setItem('fairobot-block-library', content)
     return { success: true }
+  },
+
+  updateMenuState: (state) => {
+    if (isElectronEnv && 'updateMenuState' in window.api) {
+      (window.api as any).updateMenuState(state)
+    } else {
+      console.warn('updateMenuState called outside Electron or not exposed.')
+    }
   }
 }

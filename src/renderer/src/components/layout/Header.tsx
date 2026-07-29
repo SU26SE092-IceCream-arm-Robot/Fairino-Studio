@@ -3,7 +3,7 @@ import { useRobotStore } from '../../store/robotStore'
 import { useSceneStore } from '../../store/sceneStore'
 import { generateSingleStepLua, generateLua } from '../../engine/codegen/luaCodegen'
 import { parseLua } from '../../engine/codegen/luaParser'
-import { FolderOpen, Save, FilePlus, Play, AlertTriangle, Globe, Upload, ChevronDown } from 'lucide-react'
+import { FolderOpen, Save, FilePlus, Play, Upload, ChevronDown } from 'lucide-react'
 import { electronService } from '../../services/electronService'
 import { translations } from '../../i18n/translations'
 import { strToU8, zipSync } from 'fflate'
@@ -16,7 +16,6 @@ export default function Header() {
   const steps = useRobotStore((state) => state.steps)
   const projectName = useRobotStore((state) => state.projectName)
   const currentFilePath = useRobotStore((state) => state.currentFilePath)
-  const collisionWarning = useSceneStore((state) => state.collisionWarning)
 
   const setProjectName = useRobotStore((state) => state.setProjectName)
   const setCurrentFilePath = useRobotStore((state) => state.setCurrentFilePath)
@@ -32,8 +31,35 @@ export default function Header() {
   const setLanguage = useRobotStore((state) => state.setLanguage)
   const t = (key: keyof typeof translations.vi) => translations[language][key]
 
+  const isDebugHitbox = useSceneStore((state) => state.isDebugHitbox)
+  const setDebugHitbox = useSceneStore((state) => state.setDebugHitbox)
+  const showQuickAccessToolbar = useRobotStore((state) => state.showQuickAccessToolbar)
+  const setShowQuickAccessToolbar = useRobotStore((state) => state.setShowQuickAccessToolbar)
+
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [tempName, setTempName] = useState(projectName)
+
+  useEffect(() => {
+    setTempName(projectName)
+  }, [projectName])
+
+  const handleSaveName = () => {
+    const cleanName = tempName.replace(/[^a-zA-Z0-9_-]/g, '').trim() || 'untitled'
+    setProjectName(cleanName)
+    setIsEditingName(false)
+  }
+
+  // Sync state to Electron native menu
+  useEffect(() => {
+    electronService.updateMenuState({
+      language,
+      showQuickAccessToolbar,
+      isDebugHitbox
+    })
+  }, [language, showQuickAccessToolbar, isDebugHitbox])
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -394,7 +420,7 @@ const handleExportLargeLua = async () => {
   // Subscribe to native menu actions on mount
   useEffect(() => {
     if (typeof window !== 'undefined' && 'api' in window && window.api.onMenuAction) {
-      const unsubscribe = window.api.onMenuAction((action) => {
+      const unsubscribe = window.api.onMenuAction((action, ...args: any[]) => {
         switch (action) {
           case 'new-project':
             handleNewProject()
@@ -417,6 +443,15 @@ const handleExportLargeLua = async () => {
           case 'import-lua':
             handleImportLua()
             break
+          case 'toggle-quick-access':
+            setShowQuickAccessToolbar(args[0] as boolean)
+            break
+          case 'toggle-hitbox':
+            setDebugHitbox(args[0] as boolean)
+            break
+          case 'change-language':
+            setLanguage(args[0] as 'vi' | 'en')
+            break
         }
       })
       return unsubscribe
@@ -426,7 +461,7 @@ const handleExportLargeLua = async () => {
 
   return (
     <header className="h-14 bg-[#141417] border-b border-[#2d2d34] flex items-center justify-between px-6 text-slate-200 select-none shrink-0">
-      {/* Brand / Logo */}
+      {/* Brand / Logo & Project Name */}
       <div className="flex items-center gap-3">
         <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black px-2.5 py-1 rounded-md text-sm shadow-md">
           FAI
@@ -435,123 +470,126 @@ const handleExportLargeLua = async () => {
           <h1 className="text-sm font-bold text-white leading-tight">FaiRobot Studio</h1>
           <span className="text-[10px] text-slate-500">v1.0.0 (Beta)</span>
         </div>
-      </div>
 
-      {/* Collision Global Alert */}
-      {collisionWarning && (
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-rose-950/40 border border-rose-500/35 rounded-full text-rose-400 text-xs font-bold animate-pulse">
-          <AlertTriangle size={14} /> {t('collisionWarning')}
-        </div>
-      )}
-
-      {/* Action Buttons & Language Switcher */}
-      <div className="flex items-center gap-4">
-        {/* Project Name Editor */}
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-            placeholder={t('projectNamePlaceholder')}
-            title="Tên dự án (chỉ cho phép chữ cái, số, gạch dưới và gạch ngang)"
-            className="bg-[#1e1e24] hover:bg-[#25252d] focus:bg-[#2d2d38] border border-[#2d2d34] focus:border-blue-500 rounded px-2.5 py-1 text-xs font-semibold text-white outline-none w-48 text-center transition"
-          />
+        {/* Project Name Click-to-Edit */}
+        <div className="flex items-center gap-2 border-l border-[#2d2d34] pl-4 ml-1">
+          {isEditingName ? (
+            <input
+              type="text"
+              value={tempName}
+              onChange={(e) => setTempName(e.target.value)}
+              onBlur={handleSaveName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveName()
+                if (e.key === 'Escape') {
+                  setTempName(projectName)
+                  setIsEditingName(false)
+                }
+              }}
+              autoFocus
+              className="bg-[#1e1e24] border border-blue-500/50 rounded px-2.5 py-0.5 text-xs font-semibold text-white outline-none w-36 transition"
+            />
+          ) : (
+            <div
+              onClick={() => setIsEditingName(true)}
+              className="flex items-center gap-1.5 cursor-pointer group hover:bg-white/5 px-2.5 py-0.5 rounded transition"
+              title={language === 'vi' ? 'Click để đổi tên dự án' : 'Click to rename project'}
+            >
+              <span className="text-xs font-semibold text-slate-200 group-hover:text-white transition">
+                {projectName}
+              </span>
+              <span className="text-[10px] text-slate-500 group-hover:text-slate-300 transition">✎</span>
+            </div>
+          )}
           {currentFilePath && (
-            <span className="text-[9px] text-slate-500 truncate max-w-[120px]" title={currentFilePath}>
+            <span className="text-[9px] text-slate-500 truncate max-w-[100px]" title={currentFilePath}>
               ({currentFilePath.split('\\').pop()})
             </span>
           )}
         </div>
+      </div>
 
-        <div className="w-px h-5 bg-[#2d2d34]"></div>
+      {/* Action Buttons & Settings */}
+      <div className="flex items-center gap-4">
+        {/* Quick Access Toolbar Buttons (if enabled) */}
+        {showQuickAccessToolbar && (
+          <>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleNewProject}
+                title={t('newProject')}
+                className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+              >
+                <FilePlus size={14} />
+                <span className="text-[11px] font-semibold hidden md:inline">{t('newProject')}</span>
+              </button>
+              <button
+                onClick={handleOpenProject}
+                title={t('openProject')}
+                className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+              >
+                <FolderOpen size={14} />
+                <span className="text-[11px] font-semibold hidden md:inline">{t('openProject')}</span>
+              </button>
+              <button
+                onClick={handleSaveProject}
+                title={t('saveProject')}
+                className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+              >
+                <Save size={14} />
+                <span className="text-[11px] font-semibold hidden md:inline">{t('saveProject')}</span>
+              </button>
+              
+              <div className="w-px h-5 bg-[#2d2d34] mx-1"></div>
 
-        {/* Language selector */}
-        <div className="flex items-center gap-1.5 border border-[#2d2d34] rounded-lg px-2.5 py-1.5 bg-[#1e1e24] hover:bg-[#25252d] hover:border-slate-500 transition">
-          <Globe size={13} className="text-slate-400" />
-          <select
-            value={language}
-            onChange={(e) => setLanguage(e.target.value as any)}
-            className="bg-transparent text-xs font-bold text-slate-300 outline-none cursor-pointer border-none p-0 pr-1"
-          >
-            <option value="vi">Tiếng Việt</option>
-            <option value="en">English</option>
-          </select>
-        </div>
+              <button
+                onClick={handleImportLua}
+                title={t('importLua')}
+                className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+              >
+                <Upload size={14} />
+                <span className="text-[11px] font-semibold hidden md:inline">{t('importLua')}</span>
+              </button>
+            </div>
+            <div className="w-px h-5 bg-[#2d2d34]"></div>
+          </>
+        )}
 
-        <div className="w-px h-5 bg-[#2d2d34]"></div>
-
-        <div className="flex items-center gap-2">
+        {/* Fixed Export Button */}
+        <div className="relative" ref={dropdownRef}>
           <button
-            onClick={handleNewProject}
-            title={t('newProject')}
-            className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
+            onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+            className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md transition flex items-center gap-1.5 cursor-pointer"
           >
-            <FilePlus size={14} />
-            <span className="text-[11px] font-semibold hidden md:inline">{t('newProject')}</span>
+            <Play size={12} className="fill-white" />
+            {t('exportLua')} ({steps.length})
+            <ChevronDown size={12} />
           </button>
-          <button
-            onClick={handleOpenProject}
-            title={t('openProject')}
-            className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
-          >
-            <FolderOpen size={14} />
-            <span className="text-[11px] font-semibold hidden md:inline">{t('openProject')}</span>
-          </button>
-          <button
-            onClick={handleSaveProject}
-            title={t('saveProject')}
-            className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
-          >
-            <Save size={14} />
-            <span className="text-[11px] font-semibold hidden md:inline">{t('saveProject')}</span>
-          </button>
-          
-          <div className="w-px h-5 bg-[#2d2d34] mx-1"></div>
-
-          <button
-            onClick={handleImportLua}
-            title={t('importLua')}
-            className="p-1.5 rounded bg-[#1e1e24] hover:bg-[#282830] border border-[#2d2d34] text-slate-300 hover:text-white transition flex items-center gap-1"
-          >
-            <Upload size={14} />
-            <span className="text-[11px] font-semibold hidden md:inline">{t('importLua')}</span>
-          </button>
-          
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
-              className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Play size={12} className="fill-white" />
-              {t('exportLua')} ({steps.length})
-              <ChevronDown size={12} />
-            </button>
-            {exportDropdownOpen && (
-              <div className="absolute right-0 mt-1.5 w-56 rounded-md bg-[#1c1c24] border border-[#2d2d38] shadow-lg z-50 overflow-hidden py-1">
-                <button
-                  onClick={() => {
-                    setExportDropdownOpen(false)
-                    handleExportLargeLua()
-                  }}
-                  className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
-                >
-                  <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Lớn (.lua)' : 'Export Large Workflow (.lua)'}</span>
-                  <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Gộp tất cả bước chạy vào 1 file LUA' : 'Combine all steps into 1 LUA file'}</span>
-                </button>
-                <div className="border-t border-[#2d2d38] my-1"></div>
-                <button
-                  onClick={() => {
-                    setExportDropdownOpen(false)
-                    handleExportStepsZip()
-                  }}
-                  className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
-                >
-                  <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Theo Step (.zip)' : 'Export Steps Workflow (.zip)'}</span>
-                  <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Nén các file LUA lẻ của từng bước' : 'ZIP individual LUA files of each step'}</span>
-                </button>
-              </div>
-            )}
-          </div>
+          {exportDropdownOpen && (
+            <div className="absolute right-0 mt-1.5 w-56 rounded-md bg-[#1c1c24] border border-[#2d2d38] shadow-lg z-50 overflow-hidden py-1">
+              <button
+                onClick={() => {
+                  setExportDropdownOpen(false)
+                  handleExportLargeLua()
+                }}
+                className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
+              >
+                <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Lớn (.lua)' : 'Export Large Workflow (.lua)'}</span>
+                <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Gộp tất cả bước chạy vào 1 file LUA' : 'Combine all steps into 1 LUA file'}</span>
+              </button>
+              <div className="border-t border-[#2d2d38] my-1"></div>
+              <button
+                onClick={() => {
+                  setExportDropdownOpen(false)
+                  handleExportStepsZip()
+                }}
+                className="w-full text-left px-4 py-2 text-xs text-slate-200 hover:bg-blue-600 hover:text-white transition flex flex-col gap-0.5 cursor-pointer"
+              >
+                <span className="font-bold">{language === 'vi' ? 'Xuất Workflow Theo Step (.zip)' : 'Export Steps Workflow (.zip)'}</span>
+                <span className="text-[10px] text-slate-400 group-hover:text-blue-200">{language === 'vi' ? 'Nén các file LUA lẻ của từng bước' : 'ZIP individual LUA files of each step'}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

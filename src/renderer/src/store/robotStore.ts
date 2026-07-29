@@ -37,6 +37,7 @@ interface RobotState {
   lengthUnit: 'mm' | 'cm' | 'm'
   angleUnit: 'deg' | 'rad'
   solveIKCallback: ((pose: TCPPose, seed: JointAngles) => JointAngles | null) | null
+  showQuickAccessToolbar: boolean
   
   // Actions
   setJointAngles: (angles: JointAngles) => void
@@ -48,6 +49,7 @@ interface RobotState {
   setLanguage: (lang: 'vi' | 'en') => void
   setLengthUnit: (unit: 'mm' | 'cm' | 'm') => void
   setAngleUnit: (unit: 'deg' | 'rad') => void
+  setShowQuickAccessToolbar: (show: boolean) => void
   
   // Workflow actions
   addStep: (step: Omit<WorkflowStep, 'id'>) => void
@@ -97,6 +99,7 @@ export const useRobotStore = create<RobotState>((set) => ({
   lengthUnit: 'mm',
   angleUnit: 'deg',
   solveIKCallback: null,
+  showQuickAccessToolbar: localStorage.getItem('showQuickAccessToolbar') === 'true',
   
   setJointAngles: (angles) => set({ jointAngles: angles }),
   setTCPPose: (pose) => set({ tcpPose: pose }),
@@ -107,6 +110,10 @@ export const useRobotStore = create<RobotState>((set) => ({
   setLanguage: (lang) => set({ language: lang }),
   setLengthUnit: (unit) => set({ lengthUnit: unit }),
   setAngleUnit: (unit) => set({ angleUnit: unit }),
+  setShowQuickAccessToolbar: (show) => {
+    localStorage.setItem('showQuickAccessToolbar', String(show))
+    set({ showQuickAccessToolbar: show })
+  },
   
   addStep: (step) =>
     set((state) => {

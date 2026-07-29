@@ -10,13 +10,15 @@ const api = {
   readFile: (filePath: string) => ipcRenderer.invoke('read-file', filePath),
   readBlockLibrary: () => ipcRenderer.invoke('read-block-library'),
   writeBlockLibrary: (content: string) => ipcRenderer.invoke('write-block-library', content),
-  onMenuAction: (callback: (action: string) => void) => {
-    const listener = (_event: any, action: string) => callback(action)
+  onMenuAction: (callback: (action: string, ...args: any[]) => void) => {
+    const listener = (_event: any, action: string, ...args: any[]) => callback(action, ...args)
     ipcRenderer.on('menu-action', listener)
     return () => {
       ipcRenderer.removeListener('menu-action', listener)
     }
   },
+  updateMenuState: (state: { language: 'vi' | 'en'; showQuickAccessToolbar: boolean; isDebugHitbox: boolean }) =>
+    ipcRenderer.send('update-menu-state', state),
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
   downloadUpdate: () => ipcRenderer.send('download-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
