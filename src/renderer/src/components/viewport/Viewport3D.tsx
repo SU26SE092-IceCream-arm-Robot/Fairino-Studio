@@ -413,7 +413,7 @@ export default function Viewport3D() {
     // Custom DFS that stops when it enters a different link's subtree
     const collectMeshes = (node: THREE.Object3D) => {
       // Stop traversal if we've entered a child link (but allow the root linkObj itself)
-      if (node !== linkObj && (allLinkObjs.has(node) || node.userData.isImportedTool)) return
+      if (node !== linkObj && (allLinkObjs.has(node) || node.userData.isImportedTool || node.userData.isJointHelper)) return
 
       const mesh = node as any
       if (mesh.isMesh && mesh.geometry) {
@@ -2415,6 +2415,7 @@ export default function Viewport3D() {
       
       const ringMesh = new THREE.Mesh(geometry, material)
       ringMesh.name = `${jName}_helper_ring`
+      ringMesh.userData.isJointHelper = true
       
       if (joint.axis) {
         const q = new THREE.Quaternion()
