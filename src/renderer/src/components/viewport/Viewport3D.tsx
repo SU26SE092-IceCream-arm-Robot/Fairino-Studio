@@ -46,9 +46,19 @@ const SELF_COLLISION_PAIRS = [
 
 const TOOL_ALLOWED_CONTACT_LINKS = ['wrist3_link', 'wrist2_link', 'wrist1_link']
 
+const JOINT_RING_CONFIGS: Record<string, { radius: number; tube: number }> = {
+  'j1': { radius: 0.092, tube: 0.003 },
+  'j2': { radius: 0.082, tube: 0.003 },
+  'j3': { radius: 0.075, tube: 0.003 },
+  'j4': { radius: 0.048, tube: 0.002 },
+  'j5': { radius: 0.048, tube: 0.002 },
+  'j6': { radius: 0.045, tube: 0.002 }
+}
+
 export default function Viewport3D() {
   const containerRef = useRef<HTMLDivElement>(null)
   const robotRef = useRef<any>(null)
+  const jointRingsRef = useRef<Record<string, THREE.Mesh>>({})
   const sceneRef = useRef<THREE.Scene | null>(null)
   const controlsRef = useRef<OrbitControls | null>(null)
   const transformControlsRef = useRef<any>(null)
@@ -1303,8 +1313,13 @@ export default function Viewport3D() {
       }
     }
 
+    const handleBlur = () => {
+      keysPressedRef.current.clear()
+    }
+
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
 
     // Load URDF Robot
     const loader = new URDFLoader()
@@ -1333,6 +1348,10 @@ export default function Viewport3D() {
         robotRef.current = robot
         robot.updateMatrixWorld(true)
         wristFlangeOffsetRef.current = computeWristFlangeOffset(robot)
+        
+        // Initialize visual helper rings for joint orientation
+        setupJointHelperRings(robot)
+
         setIsRobotLoaded(true)
 
         setTimeout(() => {
@@ -1972,6 +1991,7 @@ export default function Viewport3D() {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleBlur)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
       renderer.dispose()
@@ -2377,6 +2397,55 @@ export default function Viewport3D() {
     threeObj.scale.set(t.sx * scaleBuster.x, t.sy * scaleBuster.y, t.sz * scaleBuster.z)
   }
 
+  // Create and add joint helper rings to the robot model
+  const setupJointHelperRings = (robot: any) => {
+    const rings: Record<string, THREE.Mesh> = {}
+    
+    Object.entries(JOINT_RING_CONFIGS).forEach(([jName, config]) => {
+      const joint = robot.joints[jName]
+      if (!joint) return
+
+      const geometry = new THREE.TorusGeometry(config.radius, config.tube, 8, 32)
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xf59e0b, // Amber yellow
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false
+      })
+      
+      const ringMesh = new THREE.Mesh(geometry, material)
+      ringMesh.name = `${jName}_helper_ring`
+      
+      if (joint.axis) {
+        const q = new THREE.Quaternion()
+        q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), joint.axis.clone().normalize())
+        ringMesh.quaternion.copy(q)
+      }
+
+      joint.add(ringMesh)
+      rings[jName] = ringMesh
+    })
+    
+    jointRingsRef.current = rings
+  }
+
+  // Update ring colors/opacity based on selection
+  const updateJointHelperRings = (selectedJoint: string | null) => {
+    const rings = jointRingsRef.current
+    if (!rings) return
+
+    Object.entries(rings).forEach(([jName, ringMesh]) => {
+      const mat = ringMesh.material as THREE.MeshBasicMaterial
+      if (jName === selectedJoint) {
+        mat.color.setHex(0x22c55e) // Bright green
+        mat.opacity = 0.75
+      } else {
+        mat.color.setHex(0xf59e0b) // Amber yellow
+        mat.opacity = 0.3
+      }
+    })
+  }
+
   // Highlight joint links
   const highlightJointLink = (selectedJoint: string | null) => {
     const robot = robotRef.current
@@ -2423,11 +2492,11 @@ export default function Viewport3D() {
             child.material.emissive = new THREE.Color(0xf43f5e)
             child.material.emissiveIntensity = 0.8
           } else if (matchedJoint === selectedJoint) {
-            child.material.emissive = new THREE.Color(0x0284c7)
-            child.material.emissiveIntensity = 0.5
+            child.material.emissive = new THREE.Color(0x22c55e) // Bright green
+            child.material.emissiveIntensity = 0.4
           } else {
-            child.material.emissive = new THREE.Color(0x000000)
-            child.material.emissiveIntensity = 0
+            child.material.emissive = new THREE.Color(0xd97706) // Amber yellow
+            child.material.emissiveIntensity = 0.15
           }
         }
       }
@@ -2447,11 +2516,13 @@ export default function Viewport3D() {
       transformControls.getHelper().visible = false
       dummyTarget.visible = false
       highlightJointLink(null)
+      updateJointHelperRings(null)
       return
     }
 
     if (isIKMode) {
       highlightJointLink(null)
+      updateJointHelperRings(null)
       
       // Only copy the wristLink position to the dummyTarget if we are not actively dragging it
       if (!transformControls.dragging) {
@@ -2482,6 +2553,7 @@ export default function Viewport3D() {
     } else if (selectedJointName) {
       dummyTarget.visible = false
       highlightJointLink(selectedJointName)
+      updateJointHelperRings(selectedJointName)
       
       const jointObj = robot.joints[selectedJointName]
       if (jointObj) {
@@ -2502,6 +2574,7 @@ export default function Viewport3D() {
     } else if (selectedObjectId) {
       dummyTarget.visible = false
       highlightJointLink(null)
+      updateJointHelperRings(null)
 
       const threeObj = loadedObjectsRef.current.get(selectedObjectId)
       if (threeObj) {
@@ -2521,6 +2594,7 @@ export default function Viewport3D() {
       }
     } else {
       highlightJointLink(null)
+      updateJointHelperRings(null)
       transformControls.detach()
       transformControls.getHelper().visible = false
     }
