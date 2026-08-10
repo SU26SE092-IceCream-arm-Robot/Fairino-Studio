@@ -125,14 +125,24 @@ export function setupMenu(
           label: t.export,
           submenu: [
             {
-              label: t.exportLarge,
+              label: lang === 'vi' ? 'Xuất gói để đưa vào IceBot...' : 'Export package for IceBot...',
+              click: () => {
+                mainWindow.webContents.send('menu-action', 'export-icebot-authoring-bundle')
+              }
+            },
+            {
+              label: lang === 'vi'
+                ? 'Xuất toàn bộ thành một file Lua...'
+                : 'Export all steps as one Lua file...',
               accelerator: 'CmdOrCtrl+E',
               click: () => {
                 mainWindow.webContents.send('menu-action', 'export-workflow-large')
               }
             },
             {
-              label: t.exportSteps,
+              label: lang === 'vi'
+                ? 'Xuất các file Lua theo bước...'
+                : 'Export Lua files by step...',
               accelerator: 'CmdOrCtrl+Shift+E',
               click: () => {
                 mainWindow.webContents.send('menu-action', 'export-workflow-steps')

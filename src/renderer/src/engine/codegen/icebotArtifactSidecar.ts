@@ -34,7 +34,6 @@ export function createIceBotArtifactSidecar(
 ): IceBotArtifactSidecar {
   if (steps.length === 0) throw new Error('An IceBot artifact must contain at least one workflow step.')
 
-  const [primaryStep] = steps
   const artifactCode = sanitizeCode(fileName.replace(/\.lua$/i, ''))
   const declaredSemantics = steps.flatMap((step) => step.icebotSemantics ? [step.icebotSemantics] : [])
   if (declaredSemantics.length > 0) {
@@ -43,17 +42,16 @@ export function createIceBotArtifactSidecar(
       throw new Error('Workflow steps exported into one Lua artifact must use the same IceBot phase.')
 
     const effects = declaredSemantics.flatMap((semantics) => semantics.effects)
-    const effectiveEffects = effects.length > 0 ? effects : [createOpaqueEffect(primaryStep, artifactCode)]
     const beforeEffectCodes = declaredSemantics.flatMap((semantics) => semantics.beforeEffectCodes ?? [])
     const afterEffectCodes = declaredSemantics.flatMap((semantics) => semantics.afterEffectCodes ?? [])
-    validateSemantics(effectiveEffects, beforeEffectCodes, afterEffectCodes)
+    validateSemantics(effects, beforeEffectCodes, afterEffectCodes)
     return {
       schemaVersion: 2,
       artifactCode,
       artifactFileName: fileName,
       runtimeTargetCode: 'FAIRINO_LUA_V1',
       machineModelCode: 'FR5',
-      effects: effectiveEffects.map(normalizeEffect),
+      effects: effects.map(normalizeEffect),
       orderingConstraints: [
         { constraintType: 'Phase', value: phases[0], sortHint: runOrder },
         ...beforeEffectCodes.map((value) => ({
@@ -75,20 +73,8 @@ export function createIceBotArtifactSidecar(
     artifactFileName: fileName,
     runtimeTargetCode: 'FAIRINO_LUA_V1',
     machineModelCode: 'FR5',
-    effects: [
-      {
-        effectCode: `${artifactCode}_EXECUTE`,
-        effectKind: steps.every(isMotion) ? 'Motion' : 'System',
-        quantityMode: 'None'
-      }
-    ],
-    orderingConstraints: [
-      {
-        constraintType: 'Phase',
-        value: inferPhase(primaryStep),
-        sortHint: runOrder
-      }
-    ]
+    effects: [],
+    orderingConstraints: []
   }
 }
 
@@ -121,14 +107,6 @@ function validateSemantics(
     throw new Error('IceBot before/after effect codes must be non-empty.')
 }
 
-function createOpaqueEffect(step: WorkflowStep, artifactCode: string): IceBotDeclaredEffect {
-  return {
-    effectCode: `${artifactCode}_EXECUTE`,
-    effectKind: isMotion(step) ? 'Motion' : 'System',
-    quantityMode: 'None'
-  }
-}
-
 function normalizeEffect(effect: IceBotDeclaredEffect): IceBotArtifactEffect {
   const value: IceBotArtifactEffect = {
     effectCode: sanitizeCode(effect.effectCode),
@@ -144,19 +122,6 @@ function normalizeEffect(effect: IceBotDeclaredEffect): IceBotArtifactEffect {
   if (effect.requiredWorkcellCapabilityCode?.trim())
     value.requiredWorkcellCapabilityCode = sanitizeCode(effect.requiredWorkcellCapabilityCode)
   return value
-}
-
-function isMotion(step: WorkflowStep): boolean {
-  return ['MoveJ', 'MoveL', 'RotateJoint', 'MoveTCP'].includes(step.type)
-}
-
-function inferPhase(step: WorkflowStep): string {
-  const text = `${step.type} ${step.label}`.toUpperCase()
-  if (text.includes('HOME') || text.includes('PREPARE')) return 'PREPARE'
-  if (text.includes('DELIVER') || text.includes('RETURN')) return 'DELIVER'
-  if (text.includes('CLEAN')) return 'CLEANUP'
-  if (text.includes('TOPPING') || text.includes('OPTION')) return 'OPTION'
-  return 'BASE'
 }
 
 function sanitizeCode(value: string): string {

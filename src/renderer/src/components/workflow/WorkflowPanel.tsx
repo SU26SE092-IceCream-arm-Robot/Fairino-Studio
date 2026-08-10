@@ -3,7 +3,6 @@ import { WorkflowStep } from '../../types/robot.types'
 import { Plus, Trash2, ArrowUp, ArrowDown, Code2, Sparkles, HelpCircle } from 'lucide-react'
 import BlockWorkspace from './BlockWorkspace'
 import { translations } from '../../i18n/translations'
-import ArtifactSemanticsEditor from './ArtifactSemanticsEditor'
 import type { JSX } from 'react'
 
 // Helper component for descriptive tooltips on technical terms
@@ -124,7 +123,6 @@ export default function WorkflowPanel(): JSX.Element {
         </div>
       </div>
 
-      <ArtifactSemanticsEditor />
 
       {/* Mode Specific Sidebars */}
       {mode === 'normal' ? (
