@@ -46,17 +46,25 @@ export default function ScenePanel({ compact = false }: { compact?: boolean }) {
     setImportFile({ file, name, extension, modelUnit, toolMountAxis: 'auto' })
   }
 
-  const handleConfirmImport = (isTool: boolean) => {
+  const handleConfirmImport = async (isTool: boolean) => {
     if (!importFile) return
 
     const url = URL.createObjectURL(importFile.file)
     const filePath = (importFile.file as any).path
+    let fileData: Uint8Array | undefined
+    try {
+      const buffer = await importFile.file.arrayBuffer()
+      fileData = new Uint8Array(buffer)
+    } catch (e) {
+      console.warn('Failed to read binary arrayBuffer for 3D object:', e)
+    }
 
     addObject({
       name: importFile.name || 'Unnamed Object',
       fileType: importFile.extension as 'gltf' | 'glb' | 'stl' | 'obj',
       filePath,
       url,
+      fileData,
       isTool,
       modelUnit: importFile.modelUnit,
       toolMountAxis: importFile.toolMountAxis

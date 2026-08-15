@@ -8,7 +8,8 @@ import { createIceBotArtifactSidecar } from '../../engine/codegen/icebotArtifact
 import { FolderOpen, Save, FilePlus, Play, Upload, ChevronDown } from 'lucide-react'
 import { electronService } from '../../services/electronService'
 import { translations } from '../../i18n/translations'
-import { strToU8, zipSync } from 'fflate'
+import { strToU8, strFromU8, zipSync, unzipSync } from 'fflate'
+import logoImg from '../../assets/logo.png'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -89,13 +90,65 @@ export default function Header() {
     }
   }
 
-  // Serialize current workspace state to JSON string
-  const serializeProject = () => {
+  // Helper to determine MIME type for Blob creation
+  const getMimeType = (fileType: string) => {
+    switch (fileType) {
+      case 'stl': return 'model/stl'
+      case 'obj': return 'text/plain'
+      case 'gltf': return 'model/gltf+json'
+      case 'glb': return 'model/gltf-binary'
+      default: return 'application/octet-stream'
+    }
+  }
+
+  // Serialize current workspace state to ZIP bundle with embedded 3D assets
+  const serializeProjectBundle = async (): Promise<Uint8Array> => {
     const robotState = useRobotStore.getState()
     const sceneState = useSceneStore.getState()
 
+    const files: Record<string, Uint8Array> = {}
+
+    // Prepare scene objects array with embedded asset paths
+    const sceneObjects = await Promise.all(
+      sceneState.objects.map(async (obj) => {
+        const assetName = `${obj.id}.${obj.fileType}`
+        const assetPath = `assets/${assetName}`
+
+        let fileData = obj.fileData
+        // If fileData is not in memory (e.g. legacy load), try reading from filePath via Electron
+        if (!fileData && obj.filePath) {
+          try {
+            const readRes = await electronService.readBinaryFile(obj.filePath)
+            if (readRes.success && readRes.data) {
+              fileData = readRes.data
+            }
+          } catch (e) {
+            console.warn(`Could not read binary data for ${obj.name}:`, e)
+          }
+        }
+
+        if (fileData) {
+          files[assetPath] = fileData
+        }
+
+        return {
+          id: obj.id,
+          name: obj.name,
+          fileType: obj.fileType,
+          assetPath: fileData ? assetPath : undefined,
+          filePath: obj.filePath,
+          transform: obj.transform,
+          visible: obj.visible,
+          isTool: obj.isTool,
+          modelUnit: obj.modelUnit,
+          toolMountAxis: obj.toolMountAxis,
+          collisionMode: obj.collisionMode
+        }
+      })
+    )
+
     const projectData = {
-      version: '1.1',
+      version: '1.2',
       projectName: robotState.projectName,
       robotModel: robotState.robotModel,
       jointAngles: robotState.jointAngles,
@@ -103,56 +156,78 @@ export default function Header() {
       simpleBlocklyWorkspace: robotState.simpleBlocklyWorkspace,
       projectModules: robotState.projectModules,
       projectWorkflowTemplates: robotState.projectWorkflowTemplates,
-      sceneObjects: sceneState.objects.map(obj => ({
-        name: obj.name,
-        fileType: obj.fileType,
-        filePath: obj.filePath,
-        transform: obj.transform,
-        visible: obj.visible,
-        isTool: obj.isTool,
-        modelUnit: obj.modelUnit,
-        toolMountAxis: obj.toolMountAxis
-      }))
+      sceneObjects
     }
 
-    return JSON.stringify(projectData, null, 2)
+    files['project.json'] = strToU8(JSON.stringify(projectData, null, 2))
+
+    return zipSync(files, { level: 6 })
   }
 
-  // Deserialize and load workspace state from JSON string
-  const deserializeProject = (jsonStr: string, filePath: string) => {
+  // Deserialize and load workspace state from binary buffer or legacy JSON text
+  const deserializeProjectBundle = (data: Uint8Array | string, filePath: string) => {
     try {
-      const data = JSON.parse(jsonStr)
-      if (data.version !== '1.0' && data.version !== '1.1') {
+      let projectData: any = null
+      let unzippedFiles: Record<string, Uint8Array> | null = null
+
+      // Check if data is a binary ZIP (starts with PK / 0x50 0x4B 0x03 0x04)
+      if (data instanceof Uint8Array && data.length > 4 && data[0] === 0x50 && data[1] === 0x4b) {
+        try {
+          unzippedFiles = unzipSync(data)
+          if (unzippedFiles['project.json']) {
+            const jsonText = strFromU8(unzippedFiles['project.json'])
+            projectData = JSON.parse(jsonText)
+          }
+        } catch (zipErr) {
+          console.warn('Failed to unzip project bundle, trying fallback as JSON text:', zipErr)
+        }
+      }
+
+      // Fallback for legacy JSON text (v1.0 / v1.1)
+      if (!projectData) {
+        const textContent = typeof data === 'string' ? data : strFromU8(data)
+        projectData = JSON.parse(textContent)
+      }
+
+      if (!projectData || (projectData.version !== '1.0' && projectData.version !== '1.1' && projectData.version !== '1.2')) {
         alert(t('projectCompatError'))
         return
       }
 
       // 1. Populate Robot Store
-      setProjectName(data.projectName || 'loaded_project')
+      setProjectName(projectData.projectName || 'loaded_project')
       setCurrentFilePath(filePath)
-      setJointAngles(data.jointAngles || [0, 0, 0, 0, 0, 0])
-      reorderSteps(data.steps || [])
-      setSimpleBlocklyWorkspace(data.simpleBlocklyWorkspace || null)
-      setProjectModules(Array.isArray(data.projectModules) ? data.projectModules : [])
-      setProjectWorkflowTemplates(Array.isArray(data.projectWorkflowTemplates) ? data.projectWorkflowTemplates : [])
-      if (data.simpleBlocklyWorkspace) {
+      setJointAngles(projectData.jointAngles || [0, 0, 0, 0, 0, 0])
+      reorderSteps(projectData.steps || [])
+      setSimpleBlocklyWorkspace(projectData.simpleBlocklyWorkspace || null)
+      setProjectModules(Array.isArray(projectData.projectModules) ? projectData.projectModules : [])
+      setProjectWorkflowTemplates(Array.isArray(projectData.projectWorkflowTemplates) ? projectData.projectWorkflowTemplates : [])
+      if (projectData.simpleBlocklyWorkspace) {
         markSimpleWorkspaceClean()
       }
 
       // 2. Populate Scene Store
       useSceneStore.getState().clearScene()
-      if (data.sceneObjects && Array.isArray(data.sceneObjects)) {
-        data.sceneObjects.forEach((obj: any) => {
+      if (projectData.sceneObjects && Array.isArray(projectData.sceneObjects)) {
+        projectData.sceneObjects.forEach((obj: any) => {
           let url = ''
-          if (obj.filePath) {
+          let fileData: Uint8Array | undefined = undefined
+
+          // If extracted from ZIP bundle
+          if (unzippedFiles && obj.assetPath && unzippedFiles[obj.assetPath]) {
+            fileData = unzippedFiles[obj.assetPath]
+            const blob = new Blob([fileData as BlobPart], { type: getMimeType(obj.fileType) })
+            url = URL.createObjectURL(blob)
+          } else if (obj.filePath) {
             url = `file:///${obj.filePath.replace(/\\/g, '/')}`
           }
-          
+
           useSceneStore.getState().addObject({
             name: obj.name,
             fileType: obj.fileType,
             filePath: obj.filePath,
             url: url || obj.url || '',
+            fileData,
             isTool: obj.isTool,
             modelUnit:
               obj.modelUnit === 'mm' || obj.modelUnit === 'cm' || obj.modelUnit === 'm'
@@ -165,13 +240,17 @@ export default function Header() {
               obj.toolMountAxis === '+y' || obj.toolMountAxis === '-y' ||
               obj.toolMountAxis === '+z' || obj.toolMountAxis === '-z'
                 ? obj.toolMountAxis
-                : 'auto'
+                : 'auto',
+            collisionMode: obj.collisionMode || 'strict'
           })
-          
+
           const lastAdded = useSceneStore.getState().objects.slice(-1)[0]
           if (lastAdded) {
             useSceneStore.getState().updateObjectTransform(lastAdded.id, obj.transform)
             useSceneStore.getState().updateObjectVisibility(lastAdded.id, obj.visible)
+            if (obj.collisionMode) {
+              useSceneStore.getState().updateObjectCollisionMode(lastAdded.id, obj.collisionMode)
+            }
           }
         })
       }
@@ -191,11 +270,17 @@ export default function Header() {
 
     if (!result.canceled && result.filePaths.length > 0) {
       const filePath = result.filePaths[0]
-      const readRes = await electronService.readFile(filePath)
-      if (readRes.success && readRes.content) {
-        deserializeProject(readRes.content, filePath)
+      const readRes = await electronService.readBinaryFile(filePath)
+      if (readRes.success && readRes.data) {
+        deserializeProjectBundle(readRes.data, filePath)
       } else {
-        alert(`${t('projectReadError')} ${readRes.error}`)
+        // Fallback for plain text read
+        const textReadRes = await electronService.readFile(filePath)
+        if (textReadRes.success && textReadRes.content) {
+          deserializeProjectBundle(textReadRes.content, filePath)
+        } else {
+          alert(`${t('projectReadError')} ${readRes.error || textReadRes.error}`)
+        }
       }
     }
   }
@@ -203,12 +288,16 @@ export default function Header() {
   const handleSaveProject = async () => {
     const currentPath = useRobotStore.getState().currentFilePath
     if (currentPath) {
-      const content = serializeProject()
-      const writeRes = await electronService.writeFile(currentPath, content)
-      if (writeRes.success) {
-        alert(t('projectSaveSuccess'))
-      } else {
-        alert(`${t('projectSaveError')} ${writeRes.error}`)
+      try {
+        const bundle = await serializeProjectBundle()
+        const writeRes = await electronService.writeBinaryFile(currentPath, bundle)
+        if (writeRes.success) {
+          alert(t('projectSaveSuccess'))
+        } else {
+          alert(`${t('projectSaveError')} ${writeRes.error}`)
+        }
+      } catch (e: any) {
+        alert(`${t('projectSaveError')} ${e.message}`)
       }
     } else {
       handleSaveAsProject()
@@ -217,7 +306,6 @@ export default function Header() {
 
   const handleSaveAsProject = async () => {
     const projName = useRobotStore.getState().projectName
-    const content = serializeProject()
     const result = await electronService.showSaveDialog({
       title: t('saveProject'),
       defaultPath: `${projName}.fairobot`,
@@ -225,12 +313,17 @@ export default function Header() {
     })
 
     if (!result.canceled && result.filePath) {
-      const writeRes = await electronService.writeFile(result.filePath, content)
-      if (writeRes.success) {
-        setCurrentFilePath(result.filePath)
-        alert(t('projectSaveSuccess'))
-      } else {
-        alert(`${t('projectSaveError')} ${writeRes.error}`)
+      try {
+        const bundle = await serializeProjectBundle()
+        const writeRes = await electronService.writeBinaryFile(result.filePath, bundle)
+        if (writeRes.success) {
+          setCurrentFilePath(result.filePath)
+          alert(t('projectSaveSuccess'))
+        } else {
+          alert(`${t('projectSaveError')} ${writeRes.error}`)
+        }
+      } catch (e: any) {
+        alert(`${t('projectSaveError')} ${e.message}`)
       }
     }
   }
@@ -516,12 +609,10 @@ const handleExportLargeLua = async () => {
     <header className="h-14 bg-[#141417] border-b border-[#2d2d34] flex items-center justify-between px-6 text-slate-200 select-none shrink-0">
       {/* Brand / Logo & Project Name */}
       <div className="flex items-center gap-3">
-        <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black px-2.5 py-1 rounded-md text-sm shadow-md">
-          FAI
-        </div>
+        <img src={logoImg} alt="FaiRobot Studio Logo" className="w-8 h-8 rounded-lg object-contain shadow-md" />
         <div>
           <h1 className="text-sm font-bold text-white leading-tight">FaiRobot Studio</h1>
-          <span className="text-[10px] text-slate-500">v1.0.0 (Beta)</span>
+          <span className="text-[10px] text-slate-500">v1.0.6</span>
         </div>
 
         {/* Project Name Click-to-Edit */}

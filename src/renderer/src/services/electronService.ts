@@ -9,6 +9,7 @@ export interface ElectronService {
   writeFile: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
   writeBinaryFile: (filePath: string, content: Uint8Array) => Promise<{ success: boolean; error?: string }>
   readFile: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>
+  readBinaryFile: (filePath: string) => Promise<{ success: boolean; data?: Uint8Array; error?: string }>
   readBlockLibrary: () => Promise<{ success: boolean; content?: string; error?: string }>
   writeBlockLibrary: (content: string) => Promise<{ success: boolean; error?: string }>
   updateMenuState: (state: { language: 'vi' | 'en'; showQuickAccessToolbar: boolean; isDebugHitbox: boolean }) => void
@@ -93,6 +94,23 @@ export const electronService: ElectronService = {
     }
     console.warn('readFile called outside Electron env.')
     return { success: false, error: 'Không hỗ trợ đọc file trực tiếp ngoài Electron.' }
+  },
+
+  readBinaryFile: async (filePath) => {
+    if (isElectronEnv) {
+      const res = await window.api.readBinaryFile(filePath)
+      if (res.success && res.data) {
+        const binaryStr = atob(res.data)
+        const bytes = new Uint8Array(binaryStr.length)
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i)
+        }
+        return { success: true, data: bytes }
+      }
+      return { success: false, error: res.error || 'Failed to read binary file' }
+    }
+    console.warn('readBinaryFile called outside Electron env.')
+    return { success: false, error: 'Không hỗ trợ đọc file nhị phân ngoài Electron.' }
   },
 
   readBlockLibrary: async () => {

@@ -23,7 +23,7 @@ function createWindow(): void {
     height: 768,
     show: false,
     autoHideMenuBar: false,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -117,6 +117,15 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
     try {
       const content = await fs.readFile(filePath, 'utf-8')
       return { success: true, content }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('read-binary-file', async (_, filePath) => {
+    try {
+      const buffer = await fs.readFile(filePath)
+      return { success: true, data: buffer.toString('base64') }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

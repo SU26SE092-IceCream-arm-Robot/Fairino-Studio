@@ -8,6 +8,7 @@ const api = {
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('write-file', filePath, content),
   writeBinaryFile: (filePath: string, base64Content: string) => ipcRenderer.invoke('write-binary-file', filePath, base64Content),
   readFile: (filePath: string) => ipcRenderer.invoke('read-file', filePath),
+  readBinaryFile: (filePath: string) => ipcRenderer.invoke('read-binary-file', filePath),
   readBlockLibrary: () => ipcRenderer.invoke('read-block-library'),
   writeBlockLibrary: (content: string) => ipcRenderer.invoke('write-block-library', content),
   onMenuAction: (callback: (action: string, ...args: any[]) => void) => {

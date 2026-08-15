@@ -20,6 +20,7 @@ export interface SceneObject {
   fileType: 'gltf' | 'glb' | 'stl' | 'obj';
   filePath?: string; // absolute path in Electron
   url: string;       // ObjectURL for active rendering
+  fileData?: Uint8Array; // Raw binary data of the 3D model for self-contained project bundling
   transform: Transform3D;
   visible: boolean;
   baseSize?: { x: number; y: number; z: number };
@@ -28,3 +29,4 @@ export interface SceneObject {
   toolMountAxis: ToolMountAxis;
   collisionMode?: CollisionMode;
 }
+
